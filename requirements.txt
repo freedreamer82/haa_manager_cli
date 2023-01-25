@@ -1,3 +1,5 @@
 git+https://github.com/freedreamer82/homekit_python.git@master
 zeroconf==0.47.1
 urllib3
+configargparse
+scapy
