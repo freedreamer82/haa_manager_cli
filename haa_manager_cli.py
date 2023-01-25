@@ -254,7 +254,7 @@ class HAADevice:
     def isInSetupMode(ip) -> bool:
         try:
             if ip != "":
-                url = "http://{}:{}".format(ip,SETUP_PORT)
+                url = "http://{}:{}".format(ip, SETUP_PORT)
                 status_code = urllib.request.urlopen(url).getcode()
                 return status_code == 200
             else:
@@ -262,6 +262,7 @@ class HAADevice:
         except Exception as e:
             print(e)
             return False
+
 
 class Context:
     __instance = None
@@ -376,17 +377,20 @@ if __name__ == '__main__':
 
     log.info("Discovering HAA devices in the network..")
     devsNo = Context.get().discoverHAA(True)
-    log.info("Found {} devices online..\r\n".format(devsNo))
+
+    controller = Controller()
+    try:
+        controller.load_data(config.file)
+    except Exception as e:
+        logging.error(e, exc_info=True)
+        sys.exit(-1)
+
+    pair_devices = controller.get_pairings()
+
+    log.info("Found {}/{} devices online..\r\n".format(devsNo, len(pair_devices)))
 
     if config.exec != 'scan':
-        controller = Controller()
-        try:
-            controller.load_data(config.file)
-        except Exception as e:
-            logging.error(e, exc_info=True)
-            sys.exit(-1)
 
-        pair_devices = controller.get_pairings()
         if config.alias != "" and config.alias not in pair_devices:
             log.error('"{a}" is no known alias'.format(a=config.alias))
             sys.exit(-1)
@@ -410,8 +414,8 @@ if __name__ == '__main__':
                             if characteristic.get('type') == SERVICE_INFO_CHAR_NAME:
                                 name = characteristic.get('value', '')
                                 zeroConfDev = Context.get().getDiscovereHAADeviceByName(name)
-                                if Context.get().getDiscovereHAADeviceByName(name) is not None  :
-                                    if config.alias == "" or config.alias == name :
+                                if Context.get().getDiscovereHAADeviceByName(name) is not None:
+                                    if config.alias == "" or config.alias == name:
                                         haaDev = HAADevice(zeroConfDev, data, v)
                                         log.debug("creating haa device {}..".format(name))
                                         haaDevices.append(haaDev)
@@ -421,24 +425,29 @@ if __name__ == '__main__':
                                             break
                                     #   controller.save_data(config.file)
 
-        log.info("{} Device Match,{} in pairing file".format(len(haaDevices), len(pair_devices)))
+        log.info("{} Devices Match".format(len(haaDevices)))
 
         for hd in haaDevices:
             if config.exec == "reboot":
-                log.info("REBOOT Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(), hd.getIpAddress()))
+                log.info("REBOOT Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
+                                                                               hd.getIpAddress()))
                 hd.configReboot()
             elif config.exec == "update":
-                log.info("UPDATE Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(), hd.getIpAddress()))
+                log.info("UPDATE Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
+                                                                               hd.getIpAddress()))
                 log.info("use: nc -kulnw0 45678")
                 hd.configStartUpdate()
             elif config.exec == "wifi":
-                log.info("WIFI RECONNECTION Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
-                                                                                          hd.getIpAddress()))
+                log.info(
+                    "WIFI RECONNECTION Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
+                                                                                     hd.getIpAddress()))
                 hd.configWifiReconnection()
             elif config.exec == "setup":
-                log.info("SETUP Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(), hd.getIpAddress()))
+                log.info("SETUP Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
+                                                                              hd.getIpAddress()))
                 log.info("http://{}:4567".format(hd.getIpAddress()))
                 hd.configEnterSetup()
             elif config.exec == "dump":
-                log.info("DUMP Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(), hd.getIpAddress()))
+                log.info("DUMP Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
+                                                                             hd.getIpAddress()))
                 hd.dumpHomekitData()
