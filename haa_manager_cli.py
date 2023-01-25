@@ -17,7 +17,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0.txt>.
 '''
 
 import argparse
-import sys,socket
+import sys,socket,os
 import logging
 import signal as unixsignal
 from logging.handlers import RotatingFileHandler
@@ -418,7 +418,11 @@ if __name__ == '__main__':
 
     if config.exec == 'scan':
         if devsNo!=len(pair_devices) :
-            Context.get().discoverHAAInSetupMode()
+            if not 'SUDO_UID' in os.environ.keys():
+                print("WARNING!!for setup mode scanning feature,the script it requires sudo")
+                sys.exit(1)
+            else:
+                Context.get().discoverHAAInSetupMode()
     else:
 
         if config.alias != "" and config.alias not in pair_devices:
@@ -476,5 +480,3 @@ if __name__ == '__main__':
             elif config.exec == "dump":
                 log.info("DUMP Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
                 hd.dumpHomekitData()
-
-  #      controller.save_data(config.file)
