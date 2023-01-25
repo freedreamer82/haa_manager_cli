@@ -17,7 +17,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0.txt>.
 '''
 
 import argparse
-import sys
+import sys,socket
 import logging
 import signal as unixsignal
 from logging.handlers import RotatingFileHandler
@@ -26,6 +26,7 @@ from homekit.controller import Controller
 from homekit.model.characteristics import CharacteristicsTypes
 from homekit.model.services import ServicesTypes
 import urllib.request
+from scapy.all import ARP, Ether, srp
 
 VERSION = '23/02/2023'
 AUTHOR = 'SW Engineer Garzola Marco'
@@ -168,7 +169,7 @@ class HAADevice:
                             return value
         return None
 
-    def getMacAddress(self) -> str:
+    def getId(self) -> str:
         return self.info['id']
 
     def getIpAddress(self) -> str:
@@ -254,15 +255,13 @@ class HAADevice:
     def isInSetupMode(ip) -> bool:
         try:
             if ip != "":
-                url = "http://{}:{}".format(ip, SETUP_PORT)
-                status_code = urllib.request.urlopen(url).getcode()
+                url = "http://{}:{}".format(ip,SETUP_PORT)
+                status_code = urllib.request.urlopen(url,timeout=0.8).getcode()
                 return status_code == 200
             else:
                 return False
         except Exception as e:
-            print(e)
             return False
-
 
 class Context:
     __instance = None
@@ -295,12 +294,40 @@ class Context:
 
         if doPrint:
             for d in Context.__instance.discoveredDevices:
-                print("Name: {:20s} Ip: {:20s} Mac: {:20s} Category: {:20s}".format(
+                print("Name: {:20s} Ip: {:20s} Id: {:20s} Category: {:20s}".format(
                     d['name'].split('._hap')[0],
                     d['address'],
                     d['id'],
                     d['category']))
         return len(Context.__instance.discoveredDevices)
+
+    def discoverHAAInSetupMode(self,ip4 = socket.gethostbyname(socket.gethostname())  ):
+
+        target_ip = "{}/24".format(ip4)
+      #  target_ip = "192.168.1.1/24".format(ip4)
+        # IP Address for the destination
+        # create ARP packet
+        arp = ARP(pdst=target_ip)
+        # create the Ether broadcast packet
+        # ff:ff:ff:ff:ff:ff MAC address indicates broadcasting
+        ether = Ether(dst="ff:ff:ff:ff:ff:ff")
+        # stack them
+        packet = ether/arp
+
+        result = srp(packet, timeout=3, verbose=0)[0]
+
+        # a list of clients, we will fill this in the upcoming loop
+        clients = []
+
+        for sent, received in result:
+            # for each response, append ip and mac address to `clients` list
+            clients.append({'ip': received.psrc, 'mac': received.hwsrc})
+
+        print("Devices in Setup Mode:")
+        for client in clients:
+            if HAADevice.isInSetupMode(client['ip']):
+                url = "http://{}:4567".format(client['ip'])
+                print("{:16}    Mac:{}    {}".format(client['ip'], client['mac'],url))
 
     def _addHAADevice(self, device):
         Context.__instance.discoveredDevices.append(device)
@@ -314,7 +341,7 @@ class Context:
                 return d
         return None
 
-    def getDiscovereHAADeviceByMacAddress(self, name: str):
+    def getDiscovereHAADeviceById(self, name: str):
         for d in Context.__instance.discoveredDevices:
             if d['id'] == name:
                 return d
@@ -387,9 +414,12 @@ if __name__ == '__main__':
 
     pair_devices = controller.get_pairings()
 
-    log.info("Found {}/{} devices online..\r\n".format(devsNo, len(pair_devices)))
+    log.info("Found {}/{} devices online..\r\n".format(devsNo,len(pair_devices)))
 
-    if config.exec != 'scan':
+    if config.exec == 'scan':
+        if devsNo!=len(pair_devices) :
+            Context.get().discoverHAAInSetupMode()
+    else:
 
         if config.alias != "" and config.alias not in pair_devices:
             log.error('"{a}" is no known alias'.format(a=config.alias))
@@ -414,8 +444,8 @@ if __name__ == '__main__':
                             if characteristic.get('type') == SERVICE_INFO_CHAR_NAME:
                                 name = characteristic.get('value', '')
                                 zeroConfDev = Context.get().getDiscovereHAADeviceByName(name)
-                                if Context.get().getDiscovereHAADeviceByName(name) is not None:
-                                    if config.alias == "" or config.alias == name:
+                                if Context.get().getDiscovereHAADeviceByName(name) is not None  :
+                                    if config.alias == "" or config.alias == name :
                                         haaDev = HAADevice(zeroConfDev, data, v)
                                         log.debug("creating haa device {}..".format(name))
                                         haaDevices.append(haaDev)
@@ -423,31 +453,28 @@ if __name__ == '__main__':
                                             # break on first device found if not all are considered
                                             doexit = True
                                             break
-                                    #   controller.save_data(config.file)
+                                      
 
         log.info("{} Devices Match".format(len(haaDevices)))
 
         for hd in haaDevices:
             if config.exec == "reboot":
-                log.info("REBOOT Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
-                                                                               hd.getIpAddress()))
+                log.info("REBOOT Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
                 hd.configReboot()
             elif config.exec == "update":
-                log.info("UPDATE Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
-                                                                               hd.getIpAddress()))
+                log.info("UPDATE Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
                 log.info("use: nc -kulnw0 45678")
                 hd.configStartUpdate()
             elif config.exec == "wifi":
-                log.info(
-                    "WIFI RECONNECTION Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
-                                                                                     hd.getIpAddress()))
+                log.info("WIFI RECONNECTION Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(),
+                                                                                          hd.getIpAddress()))
                 hd.configWifiReconnection()
             elif config.exec == "setup":
-                log.info("SETUP Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
-                                                                              hd.getIpAddress()))
+                log.info("SETUP Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
                 log.info("http://{}:4567".format(hd.getIpAddress()))
                 hd.configEnterSetup()
             elif config.exec == "dump":
-                log.info("DUMP Device: {:20s} Mac: {:20s} Ip: {:20s}".format(hd.getName(), hd.getMacAddress(),
-                                                                             hd.getIpAddress()))
+                log.info("DUMP Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
                 hd.dumpHomekitData()
+
+  #      controller.save_data(config.file)
