@@ -430,7 +430,7 @@ if __name__ == '__main__':
             sys.exit(-1)
 
         deviceIsPaired : bool = False
-        #we found the name onlne , cit it paired? get it's Paired id ID
+        #we found the name onlne , is it paired? get its Paired ID
         for k,v  in pair_devices.items():
             if dev['id']  == v._get_pairing_data()['AccessoryPairingID'] :
                 deviceIsPaired = True
