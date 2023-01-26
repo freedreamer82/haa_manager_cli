@@ -53,7 +53,7 @@ parser.add('-v', action='version', version=VERSION + "\n" + AUTHOR)
 parser.add('-d', '--debug', action='store_true', default=False, help='debug mode')
 parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number of seconds to wait')
 parser.add('-f', action='store', required=True, dest='file', help='File with the pairing data')
-parser.add('-a', action='store', required=False, dest='alias', help='alias for the pairing')
+parser.add('-n', action='store', required=False, dest='name', help='name of device found online,shown on scan')
 parser.add_argument("-e", "--exec", required=True, type=str,
                     choices=['update', 'reboot', 'setup', 'wifi', 'dump', 'scan'],
                     help="type of action to execute")
@@ -304,7 +304,7 @@ class Context:
     def discoverHAAInSetupMode(self,ip4 = socket.gethostbyname(socket.gethostname())  ):
 
         target_ip = "{}/24".format(ip4)
-      #  target_ip = "192.168.1.1/24".format(ip4)
+        #  target_ip = "192.168.1.1/24".format(ip4)
         # IP Address for the destination
         # create ARP packet
         arp = ARP(pdst=target_ip)
@@ -341,9 +341,9 @@ class Context:
                 return d
         return None
 
-    def getDiscovereHAADeviceById(self, name: str):
+    def getDiscovereHAADeviceById(self, id: str):
         for d in Context.__instance.discoveredDevices:
-            if d['id'] == name:
+            if d['id'] == id:
                 return d
         return None
 
@@ -367,8 +367,8 @@ def parseArguments(config: argparse.Namespace) -> None:
     ctx.logger = logging.getLogger()
     ctx.timeout = config.timeout
 
-    if config.exec == 'scan' and config.alias:
-        ctx.logger.error("scan mode and alias are not allowed together")
+    if config.exec == 'scan' and config.name:
+        ctx.logger.error("scan mode and name are not allowed together")
         sys.exit(0)
 
     if config.debug:
@@ -402,7 +402,7 @@ if __name__ == '__main__':
 
     log = Context.get().get_logger()
 
-    log.info("Discovering HAA devices in the network..")
+    log.info("Discovering HAA devices in the network...")
     devsNo = Context.get().discoverHAA(True)
 
     controller = Controller()
@@ -413,7 +413,6 @@ if __name__ == '__main__':
         sys.exit(-1)
 
     pair_devices = controller.get_pairings()
-
     log.info("Found {}/{} devices online..\r\n".format(devsNo,len(pair_devices)))
 
     if config.exec == 'scan':
@@ -424,10 +423,23 @@ if __name__ == '__main__':
             else:
                 Context.get().discoverHAAInSetupMode()
     else:
-
-        if config.alias != "" and config.alias not in pair_devices:
-            log.error('"{a}" is no known alias'.format(a=config.alias))
+        ## Validate name of the device
+        dev = Context.get().getDiscovereHAADeviceByName(config.name)
+        if not dev:
+            log.error('"{a}" is not a valid device name found online'.format(a=config.name))
             sys.exit(-1)
+
+        deviceIsPaired : bool = False
+        #we found the name onlne , cit it paired? get it's Paired id ID
+        for k,v  in pair_devices.items():
+            if dev['id']  == v._get_pairing_data()['AccessoryPairingID'] :
+                deviceIsPaired = True
+                break
+
+        if not deviceIsPaired :
+            log.error('"{a}" is an online device but NOT Paired'.format(a=config.name))
+            sys.exit(-1)
+        #############
 
         doexit: bool = False
         for k, v in pair_devices.items():
@@ -449,15 +461,15 @@ if __name__ == '__main__':
                                 name = characteristic.get('value', '')
                                 zeroConfDev = Context.get().getDiscovereHAADeviceByName(name)
                                 if Context.get().getDiscovereHAADeviceByName(name) is not None  :
-                                    if config.alias == "" or config.alias == name :
+                                    if config.name == "" or config.name == name :
                                         haaDev = HAADevice(zeroConfDev, data, v)
                                         log.debug("creating haa device {}..".format(name))
                                         haaDevices.append(haaDev)
-                                        if config.alias != "":
+                                        if config.name != "":
                                             # break on first device found if not all are considered
                                             doexit = True
                                             break
-                                      
+
 
         log.info("{} Devices Match".format(len(haaDevices)))
 
@@ -471,7 +483,7 @@ if __name__ == '__main__':
                 hd.configStartUpdate()
             elif config.exec == "wifi":
                 log.info("WIFI RECONNECTION Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(),
-                                                                                          hd.getIpAddress()))
+                                                                                         hd.getIpAddress()))
                 hd.configWifiReconnection()
             elif config.exec == "setup":
                 log.info("SETUP Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
