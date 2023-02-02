@@ -78,7 +78,7 @@ options:
 
 Scan Mode allows to discover devices (already paired in Home Assistant) in your network.
 
-`sudo python3.10 haa_manager_cli.py -f pairing-file.json -e scan`
+`sudo python haa_manager_cli.py -f pairing-file.json -e scan`
 
 
 ```
@@ -97,10 +97,10 @@ You can also see if any device (from your pairing file) is in Setup Mode.
 
 For all operations you must use the name discovered with the scan.
 
-`python3.10 haa_manager_cli.py -f pairing-file.json -e update -n HAA-AABBCC`
+`python haa_manager_cli.py -f pairing-file.json -e update -n HAA-AABBCC`
 
 ```
-20:32:45,INFO Discovering HAA devices in the network..
+INFO Discovering HAA devices in the network..
 Name: HAA-AABBCC       Ip: 192.168.1.151        Id: 1F:27:12:BA:BC:58    Category: Window Covering  
 Name: HAA-786678       Ip: 192.168.1.51         Id: 6B:D5:81:BD:5B:EA    Category: Switch 
 20:32:55,INFO Found 8/9 devices online..
