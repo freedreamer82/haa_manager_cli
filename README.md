@@ -1,7 +1,7 @@
 # HAA Manager CLI
 
   
-The simplest solution to handle HAA devices in Home Assistant is to add extra pairing in HAA Setup mode adding them to ios controller besides HA : In this way you can use HAA Manager App in parallel to Home Assistant.(That's the way I suggest you).
+The simplest solution to handle [HAA](https://github.com/RavenSystem/esp-homekit-devices) devices in Home Assistant is to add extra pairing in HAA Setup mode adding them to ios controller besides HA : In this way you can use HAA Manager App in parallel to Home Assistant.(That's the way I suggest you).
 
 For those who don't want extra pairing there is HAA Manager CLI.
 
