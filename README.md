@@ -117,3 +117,13 @@ To see the update progress , as suggested , use:
 
 `nc -kulnw0 45678`
 
+
+# Donations
+
+If you like the project , consider a donation
+
+<a href="https://www.paypal.com/donate/?business=HDH35MSZ6VW58&no_recurring=0&currency_code=EUR" 
+target="_blank">
+<img src="https://www.paypalobjects.com/en_US/GB/i/btn/btn_donateCC_LG.gif" alt="PayPal this" 
+title="PayPal – The safer, easier way to pay online!" border="0" />
+</a>
