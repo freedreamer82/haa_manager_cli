@@ -111,7 +111,9 @@ Name: HAA-786678       Ip: 192.168.1.51         Id: 6B:D5:81:BD:5B:EA    Categor
 20:33:10,INFO use: nc -kulnw0 45678
 ```
 
-To see the progress , as suggested , use:
+20:33:09,ERROR HAA-12345 NOT online..! means that in the paring file there is the device BUT it's not online during the scan.
+
+To see the update progress , as suggested , use:
 
 `nc -kulnw0 45678`
 
