@@ -55,7 +55,7 @@ parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number
 parser.add('-f', action='store', required=True, dest='file', help='File with the pairing data')
 parser.add('-n', action='store', required=False, dest='name', help='name of device found online,shown on scan')
 parser.add_argument("-e", "--exec", required=True, type=str,
-                    choices=['update', 'reboot', 'setup', 'wifi', 'dump', 'scan'],
+                    choices=['update', 'reboot', 'setup', 'wifi', 'dump', 'scan','version'],
                     help="type of action to execute")
 
 
@@ -493,3 +493,5 @@ if __name__ == '__main__':
             elif config.exec == "dump":
                 log.info("DUMP Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
                 hd.dumpHomekitData()
+            elif config.exec == "version":
+                log.info("Device: {:20s} Version: {:20s}".format(hd.getName(),hd.getFwVersion())) 
