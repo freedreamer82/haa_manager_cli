@@ -117,6 +117,15 @@ To see the update progress , as suggested , use:
 
 `nc -kulnw0 45678`
 
+# Set All devices together
+
+If you need to setup all devices together is possible to use an empty string in the cli , it will be considered as a wildcard.
+For example to update all devices in the network:
+
+`python haa_manager_cli.py -f pairing-file.json -e update -n ""`
+
+
+
 
 # Donations
 
