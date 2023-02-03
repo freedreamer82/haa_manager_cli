@@ -54,8 +54,8 @@ you must copy them and create a pairing-file.json in the form:
 alias1..alias2 etc are only aliases for the devices : give them different names for each item.
 
 
-# Features
-There are 6 Features available : update , reboot , enter setup mode , reconnecting WIFI , dump the data from device ,scan, get FW version.
+# Commands
+There are 7 commands available : update , reboot , enter setup mode , reconnecting WIFI , dump all data device ,scan, get device FW version.
 
 ```
 usage: haa_manager_cli.py [-h] [-l log File] [-v] [-d] [-t TIMEOUT] -f FILE [-n NAME] -e {update,reboot,setup,wifi,dump,scan,version}
