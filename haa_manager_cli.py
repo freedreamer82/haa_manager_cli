@@ -424,21 +424,22 @@ if __name__ == '__main__':
                 Context.get().discoverHAAInSetupMode()
     else:
         ## Validate name of the device
-        dev = Context.get().getDiscovereHAADeviceByName(config.name)
-        if not dev:
-            log.error('"{a}" is not a valid device name found online'.format(a=config.name))
-            sys.exit(-1)
+        if config.name != "":
+            dev = Context.get().getDiscovereHAADeviceByName(config.name)
+            if not dev:
+                log.error('"{a}" is not a valid device name found online'.format(a=config.name))
+                sys.exit(-1)
 
-        deviceIsPaired : bool = False
-        #we found the name onlne , is it paired? get its Paired ID
-        for k,v  in pair_devices.items():
-            if dev['id']  == v._get_pairing_data()['AccessoryPairingID'] :
-                deviceIsPaired = True
-                break
+            deviceIsPaired : bool = False
+            #we found the name onlne , is it paired? get its Paired ID
+            for k,v  in pair_devices.items():
+                if dev['id']  == v._get_pairing_data()['AccessoryPairingID'] :
+                    deviceIsPaired = True
+                    break
 
-        if not deviceIsPaired :
-            log.error('"{a}" is an online device but NOT Paired'.format(a=config.name))
-            sys.exit(-1)
+            if not deviceIsPaired :
+                log.error('"{a}" is an online device but NOT Paired'.format(a=config.name))
+                sys.exit(-1)
         #############
 
         doexit: bool = False
