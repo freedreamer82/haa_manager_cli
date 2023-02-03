@@ -55,10 +55,10 @@ alias1..alias2 etc are only aliases for the devices : give them different names 
 
 
 # Features
-There are 6 Features available : update , reboot , enter setup mode , reconnecting WIFI , dump the data from device and scan.
+There are 6 Features available : update , reboot , enter setup mode , reconnecting WIFI , dump the data from device ,scan, get FW version.
 
 ```
-usage: haa_manager_cli.py [-h] [-l log File] [-v] [-d] [-t TIMEOUT] -f FILE [-n NAME] -e {update,reboot,setup,wifi,dump,scan}
+usage: haa_manager_cli.py [-h] [-l log File] [-v] [-d] [-t TIMEOUT] -f FILE [-n NAME] -e {update,reboot,setup,wifi,dump,scan,version}
 
 options:
   -h, --help            show this help message and exit
