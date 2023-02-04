@@ -37,7 +37,7 @@ SERVICE_INFO_CHAR_NAME = "00000023-0000-1000-8000-0026BB765291"
 SERVICE_INFO_CHAR_MANUF = "00000021-0000-1000-8000-0026BB765291"
 SERVICE_INFO_CHAR_FW_REV = "00000052-0000-1000-8000-0026BB765291"
 
-CUSTOM_HAA_COMMAND = "cmy"
+CUSTOM_HAA_COMMAND = "rgb"
 
 HAA_CUSTOM_SERVICE = "F0000100-0218-2017-81BF-AF2B7C833922"
 HAA_CUSTOM_CONFIG_CHAR = "F0000101-0218-2017-81BF-AF2B7C833922"
@@ -188,10 +188,12 @@ class HAADevice:
         return self.fwversion
 
     def _getSetupWord(self):
-        cmp = versionCompare(self.getFwVersion(), "11.8.0")
+        cmp = versionCompare(self.getFwVersion(), "11.9.0")
         if cmp >= 0:
-            # greater than 11.8.0
+            # greater than 11.9.0
             return CUSTOM_HAA_COMMAND
+        elif versionCompare(self.getFwVersion(), "11.8.0") >= 0 :
+            return "cmy"
         else:
             # old version use a different word
             return "#HAA@trcmd"
