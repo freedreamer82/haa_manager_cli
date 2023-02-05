@@ -3,3 +3,4 @@ zeroconf==0.47.1
 urllib3
 configargparse
 scapy
+HAP-python
