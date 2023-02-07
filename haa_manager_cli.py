@@ -43,6 +43,9 @@ HAA_CUSTOM_SERVICE = "F0000100-0218-2017-81BF-AF2B7C833922"
 HAA_CUSTOM_CONFIG_CHAR = "F0000101-0218-2017-81BF-AF2B7C833922"
 SETUP_PORT = 4567
 
+
+ALL_DEVICES_WILDCARD = "*"
+
 FILELOGSIZE = 1024 * 1024 * 10  # 10 mb max
 
 parser = configargparse.ArgParser(default_config_files=[''])
@@ -53,7 +56,7 @@ parser.add('-v', action='version', version=VERSION + "\n" + AUTHOR)
 parser.add('-d', '--debug', action='store_true', default=False, help='debug mode')
 parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number of seconds to wait')
 parser.add('-f', action='store', required=True, dest='file', help='File with the pairing data')
-parser.add('-n', action='store', required=False, dest='name', help='name of device found online,shown on scan')
+parser.add('-n', action='store', required=False, dest='name', help='name of device found online,shown on scan. wildcard "*" means all')
 parser.add_argument("-e", "--exec", required=True, type=str,
                     choices=['update', 'reboot', 'setup', 'wifi', 'dump', 'scan','version'],
                     help="type of action to execute")
@@ -426,7 +429,7 @@ if __name__ == '__main__':
                 Context.get().discoverHAAInSetupMode()
     else:
         ## Validate name of the device
-        if config.name != "":
+        if config.name != ALL_DEVICES_WILDCARD:
             dev = Context.get().getDiscovereHAADeviceByName(config.name)
             if not dev:
                 log.error('"{a}" is not a valid device name found online'.format(a=config.name))
@@ -464,11 +467,11 @@ if __name__ == '__main__':
                                 name = characteristic.get('value', '')
                                 zeroConfDev = Context.get().getDiscovereHAADeviceByName(name)
                                 if Context.get().getDiscovereHAADeviceByName(name) is not None  :
-                                    if config.name == "" or config.name == name :
+                                    if config.name == ALL_DEVICES_WILDCARD or config.name == name :
                                         haaDev = HAADevice(zeroConfDev, data, v)
                                         log.debug("creating haa device {}..".format(name))
                                         haaDevices.append(haaDev)
-                                        if config.name != "":
+                                        if config.name != ALL_DEVICES_WILDCARD:
                                             # break on first device found if not all are considered
                                             doexit = True
                                             break
