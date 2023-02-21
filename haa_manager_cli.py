@@ -191,10 +191,11 @@ class HAADevice:
         return self.fwversion
 
     def _getSetupWord(self):
-        cmp = versionCompare(self.getFwVersion(), "11.9.0")
+        cmp = versionCompare(self.getFwVersion(), "11.10")
         if cmp >= 0:
-            # greater than 11.9.0
-            return CUSTOM_HAA_COMMAND
+            return "pwm"
+        elif versionCompare(self.getFwVersion(), "11.9.0") >= 0 :
+                return "rgb"
         elif versionCompare(self.getFwVersion(), "11.8.0") >= 0 :
             return "cmy"
         else:
