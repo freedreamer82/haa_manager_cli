@@ -4,3 +4,4 @@ urllib3
 configargparse
 scapy
 HAP-python
+requests
