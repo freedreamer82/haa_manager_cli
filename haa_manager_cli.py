@@ -17,6 +17,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0.txt>.
 '''
 
 import argparse
+import requests
 import sys,socket,os
 import logging
 import signal as unixsignal
@@ -258,6 +259,12 @@ class HAADevice:
         results = self.pairing.put_characteristics(characteristics, do_conversion=True)
 
     @staticmethod
+    def getLastRelease() -> str:
+        #https://api.github.com/repos/{owner}/{repo}/releases/latest
+        response = requests.get("https://api.github.com/repos/RavenSystem/esp-homekit-devices/releases/latest")
+        return response.json()["name"]
+
+    @staticmethod
     def isInSetupMode(ip) -> bool:
         try:
             if ip != "":
@@ -408,6 +415,9 @@ if __name__ == '__main__':
 
     log = Context.get().get_logger()
 
+    log.info("Last release: {}".format( HAADevice.getLastRelease() ))
+
+
     log.info("Discovering HAA devices in the network...")
     devsNo = Context.get().discoverHAA(True)
 
@@ -477,9 +487,8 @@ if __name__ == '__main__':
                                             doexit = True
                                             break
 
-
         log.info("{} Devices Match".format(len(haaDevices)))
-
+        
         for hd in haaDevices:
             if config.exec == "reboot":
                 log.info("REBOOT Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
