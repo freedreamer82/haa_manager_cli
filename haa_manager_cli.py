@@ -38,7 +38,7 @@ SERVICE_INFO_CHAR_NAME = "00000023-0000-1000-8000-0026BB765291"
 SERVICE_INFO_CHAR_MANUF = "00000021-0000-1000-8000-0026BB765291"
 SERVICE_INFO_CHAR_FW_REV = "00000052-0000-1000-8000-0026BB765291"
 
-CUSTOM_HAA_COMMAND = "rgb"
+CUSTOM_HAA_COMMAND = "#HAA@trcmd"
 
 HAA_CUSTOM_SERVICE = "F0000100-0218-2017-81BF-AF2B7C833922"
 HAA_CUSTOM_CONFIG_CHAR = "F0000101-0218-2017-81BF-AF2B7C833922"
@@ -48,6 +48,17 @@ SETUP_PORT = 4567
 ALL_DEVICES_WILDCARD = "*"
 
 FILELOGSIZE = 1024 * 1024 * 10  # 10 mb max
+
+############### CUSTOM COMMANDS ##################
+#if you add something keep the order..
+CustomCommands = {
+    "12.0.0": "io",
+    "11.9.0" : "rgb",
+    "11.8.0" : "cmy"
+}
+###################################################
+
+
 
 parser = configargparse.ArgParser(default_config_files=[''])
 # parser.add('-c', '--my-config', required=False, is_config_file=True, help='config file path')
@@ -192,16 +203,7 @@ class HAADevice:
         return self.fwversion
 
     def _getSetupWord(self):
-        cmp = versionCompare(self.getFwVersion(), "12.0.0")
-        if cmp >= 0:
-            return "io"
-        elif versionCompare(self.getFwVersion(), "11.9.0") >= 0 :
-                return "rgb"
-        elif versionCompare(self.getFwVersion(), "11.8.0") >= 0 :
-            return "cmy"
-        else:
-            # old version use a different word
-            return "#HAA@trcmd"
+        return HAADevice.getCustomCommand(self.getFwVersion())
 
     def _getWordToReboot(self):
         # here check version to change word
@@ -257,6 +259,16 @@ class HAADevice:
     def configWifiReconnection(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToWifiReconnection())]
         results = self.pairing.put_characteristics(characteristics, do_conversion=True)
+
+    @staticmethod
+    def getCustomCommand(version :str) -> str:
+        for key, value in CustomCommands.items():
+            cmp = versionCompare(version, key)
+            if cmp >= 0:
+                #version > key
+                return value
+
+        return CUSTOM_HAA_COMMAND   
 
     @staticmethod
     def getLastRelease() -> str:
