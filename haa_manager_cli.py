@@ -272,9 +272,12 @@ class HAADevice:
 
     @staticmethod
     def getLastRelease() -> str:
+        try:
         #https://api.github.com/repos/{owner}/{repo}/releases/latest
-        response = requests.get("https://api.github.com/repos/RavenSystem/esp-homekit-devices/releases/latest")
-        return response.json()["name"]
+          response = requests.get("https://api.github.com/repos/RavenSystem/esp-homekit-devices/releases/latest")
+          return response.json()["name"]
+        except Exception as e:
+          return ""
 
     @staticmethod
     def isInSetupMode(ip) -> bool:
@@ -472,33 +475,36 @@ if __name__ == '__main__':
 
         doexit: bool = False
         for k, v in pair_devices.items():
-            try:
-                data = v.list_accessories_and_characteristics()
-            except Exception as e:
-                log.error("{} NOT online..!".format(k))
-                continue
+            if config.name == ALL_DEVICES_WILDCARD or k == config.name:
+                try:
+                    data = v.list_accessories_and_characteristics()
+                except Exception as e:
+                    log.error("{} NOT online..!".format(k))
+                    continue
 
-            if doexit:
-                break
+                if doexit:
+                    break
 
-            for accessory in data:
-                for service in accessory['services']:
-                    s_type = service['type']
-                    if s_type == SERVICE_INFO_TYPE:
-                        for characteristic in service['characteristics']:
-                            if characteristic.get('type') == SERVICE_INFO_CHAR_NAME:
-                                name = characteristic.get('value', '')
-                                zeroConfDev = Context.get().getDiscovereHAADeviceByName(name)
-                                if Context.get().getDiscovereHAADeviceByName(name) is not None  :
-                                    if config.name == ALL_DEVICES_WILDCARD or config.name == name :
-                                        haaDev = HAADevice(zeroConfDev, data, v)
-                                        log.debug("creating haa device {}..".format(name))
-                                        haaDevices.append(haaDev)
-                                        if config.name != ALL_DEVICES_WILDCARD:
-                                            # break on first device found if not all are considered
-                                            doexit = True
-                                            break
+                for accessory in data:
+                    for service in accessory['services']:
+                        s_type = service['type']
+                        if s_type == SERVICE_INFO_TYPE:
+                            for characteristic in service['characteristics']:
+                                if characteristic.get('type') == SERVICE_INFO_CHAR_NAME:
+                                    name = characteristic.get('value', '')
+                                    zeroConfDev = Context.get().getDiscovereHAADeviceByName(name)
+                                    if Context.get().getDiscovereHAADeviceByName(name) is not None  :
+                                        if config.name == ALL_DEVICES_WILDCARD or config.name == name :
+                                            haaDev = HAADevice(zeroConfDev, data, v)
+                                            log.info("haa device {} handled ...".format(name))
+                                            haaDevices.append(haaDev)
+                                            if config.name != ALL_DEVICES_WILDCARD:
+                                                # break on first device found if not all are considered
+                                                doexit = True
+                                                break
 
+
+        print("")
         log.info("{} Devices Match".format(len(haaDevices)))
         
         for hd in haaDevices:
@@ -521,4 +527,4 @@ if __name__ == '__main__':
                 log.info("DUMP Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
                 hd.dumpHomekitData()
             elif config.exec == "version":
-                log.info("Device: {:20s} Version: {:20s}".format(hd.getName(),hd.getFwVersion())) 
+                log.info("Device: {:20s} Version: {:20s}".format(hd.getName(),hd.getFwVersion()))
