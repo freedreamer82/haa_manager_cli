@@ -32,7 +32,7 @@ from scapy.all import ARP, Ether, srp
 VERSION = '23/02/2023'
 AUTHOR = 'SW Engineer Garzola Marco'
 
-HAA_MANUFACTURER = "RavenSystem HAA Peregrine"
+HAA_MANUFACTURER = "RavenSystem HAA"
 SERVICE_INFO_TYPE = "0000003E-0000-1000-8000-0026BB765291"
 SERVICE_INFO_CHAR_NAME = "00000023-0000-1000-8000-0026BB765291"
 SERVICE_INFO_CHAR_MANUF = "00000021-0000-1000-8000-0026BB765291"
@@ -52,7 +52,8 @@ FILELOGSIZE = 1024 * 1024 * 10  # 10 mb max
 ############### CUSTOM COMMANDS ##################
 #if you add something keep the order..
 CustomCommands = {
-    "12.0.0": "io",
+    "12.3.0":  "zc",
+    "12.0.0":  "io",
     "11.9.0" : "rgb",
     "11.8.0" : "cmy"
 }
@@ -74,6 +75,10 @@ parser.add_argument("-e", "--exec", required=True, type=str,
                     help="type of action to execute")
 
 
+# versiontuple("2.3.1") > versiontuple("10.1.1") -> False
+def versiontuple(v):
+    return tuple(map(int, (v.split("."))))
+
 # Method to compare two versions.
 # Return 1 if v2 is smaller,
 # -1 if v1 is smaller,
@@ -90,33 +95,15 @@ parser.add_argument("-e", "--exec", required=True, type=str,
 #        print ("Both versions are equal")
 
 def versionCompare(v1, v2):
-    # This will split both the versions by '.'
-    arr1 = v1.split(".")
-    arr2 = v2.split(".")
-    n = len(arr1)
-    m = len(arr2)
 
-    # converts to integer from string
-    arr1 = [int(i) for i in arr1]
-    arr2 = [int(i) for i in arr2]
+    if versiontuple(v2) <  versiontuple(v1) :
+       return 1
 
-    # compares which list is bigger and fills
-    # smaller list with zero (for unequal delimiters)
-    if n > m:
-        for i in range(m, n):
-            arr2.append(0)
-    elif m > n:
-        for i in range(n, m):
-            arr1.append(0)
+    if  versiontuple(v1) <  versiontuple(v2) :
+       return -1
 
-    # returns 1 if version 1 is bigger and -1 if
-    # version 2 is bigger and 0 if equal
-    for i in range(len(arr1)):
-        if arr1[i] > arr2[i]:
-            return 1
-        elif arr2[i] > arr1[i]:
-            return -1
-        return 0
+    if  versiontuple(v1)  ==  versiontuple(v2) :
+       return 0
 
 
 class HAADevice:
@@ -203,7 +190,9 @@ class HAADevice:
         return self.fwversion
 
     def _getSetupWord(self):
-        return HAADevice.getCustomCommand(self.getFwVersion())
+        word = HAADevice.getCustomCommand(self.getFwVersion())
+        log.debug("FW {}-> {}".format(self.getFwVersion(),word))
+        return word
 
     def _getWordToReboot(self):
         # here check version to change word
@@ -264,6 +253,7 @@ class HAADevice:
     def getCustomCommand(version :str) -> str:
         for key, value in CustomCommands.items():
             cmp = versionCompare(version, key)
+            log.debug("comparing {},{} -> {}".format(version,key,cmp))
             if cmp >= 0:
                 #version > key
                 return value
@@ -316,7 +306,7 @@ class Context:
     def discoverHAA(self, doPrint: bool = False) -> int:
         results = Controller.discover(Context.get().get_timeout_sec())
         for info in results:
-            if info['md'] == HAA_MANUFACTURER:
+            if info['md'].startswith(HAA_MANUFACTURER):
                 # dev = HAADevice(info)
                 self._addHAADevice(info)
 
