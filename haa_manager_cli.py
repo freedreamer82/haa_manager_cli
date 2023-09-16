@@ -17,17 +17,27 @@ along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0.txt>.
 '''
 
 import argparse
+
+import aiohomekit
 import requests
-import sys,socket,os
-import logging
+import socket,os
 import signal as unixsignal
 from logging.handlers import RotatingFileHandler
 import configargparse
-from homekit.controller import Controller
-from homekit.model.characteristics import CharacteristicsTypes
-from homekit.model.services import ServicesTypes
 import urllib.request
 from scapy.all import ARP, Ether, srp
+
+import argparse
+import asyncio
+from collections.abc import AsyncIterator
+import contextlib
+import logging
+import sys
+from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
+from aiohomekit.zeroconf import ZeroconfServiceListener
+from aiohomekit import Controller
+from aiohomekit.model.categories import Categories
+
 
 VERSION = '23/02/2023'
 AUTHOR = 'SW Engineer Garzola Marco'
@@ -68,12 +78,83 @@ parser.add("-l", "--log", nargs=1, metavar=("log File"), default=False,
            help=" path file to save log")  # this option can be set in a config file because it starts with '--'
 parser.add('-v', action='version', version=VERSION + "\n" + AUTHOR)
 parser.add('-d', '--debug', action='store_true', default=False, help='debug mode')
-parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number of seconds to wait')
+parser.add('-t', '--timeout', required=False, type=int, default=20, help='Number of seconds to wait')
 parser.add('-f', action='store', required=True, dest='file', help='File with the pairing data')
-parser.add('-n', action='store', required=False, dest='name', help='name of device found online,shown on scan. wildcard "*" means all')
+parser.add('-i', action='store', required=False, dest='id', help='pairID of device found online,shown on scan. wildcard "*" means all')
 parser.add_argument("-e", "--exec", required=True, type=str,
                     choices=['update', 'reboot', 'setup', 'wifi', 'dump', 'scan','version'],
                     help="type of action to execute")
+
+
+
+
+def homekitCategoryToString( category : int) -> str :
+    if category == Categories.OTHER :
+        return "Other"
+    if category == Categories.BRIDGE:
+        return "Bridge"
+    if category == Categories.FAN:
+        return "Fan"
+    if category == Categories.GARAGE:
+        return "Garage"
+    if category == Categories.LIGHTBULB:
+        return "LightBulb"
+    if category == Categories.DOOR_LOCK:
+        return "Door Lock"
+    if category == Categories.OUTLET:
+        return "Outlet"
+    if category == Categories.SWITCH:
+        return "Switch"
+    if category == Categories.THERMOSTAT:
+        return "Thermostat"
+    if category == Categories.SENSOR:
+        return "Sensor"
+    if category == Categories.SECURITY_SYSTEM:
+        return "Security System"
+    if category == Categories.DOOR:
+        return "Door"
+    if category == Categories.WINDOW:
+        return "Window"
+    if category == Categories.WINDOW_COVERING:
+        return "Window Covering"
+    if category == Categories.PROGRAMMABLE_SWITCH:
+        return "Programmable Switch"
+    if category == Categories.RANGE_EXTENDER:
+        return "Range Extender"
+    if category == Categories.IP_CAMERA:
+        return "Ip Camera"
+    if category == Categories.VIDEO_DOOR_BELL:
+        return "Video DoorBell"
+    if category == Categories.AIR_PURIFIER:
+        return "Air Purifier"
+    if category == Categories.HEATER:
+        return "Heater"
+    if category == Categories.AIR_CONDITIONER:
+        return "Air Conditioner"
+    if category == Categories.HUMIDIFIER:
+        return "Humidifier"
+    if category == Categories.DEHUMIDIFER:
+        return "Dehumidifier"
+    if category == Categories.APPLE_TV:
+        return "Apple Tv"
+    if category == Categories.HOMEPOD:
+        return "Homepod"
+    if category == Categories.SPEAKER:
+        return "Speaker"
+    if category == Categories.AIRPORT:
+        return "Airport"
+    if category == Categories.SPRINKLER:
+        return "Sprinkler"
+    if category == Categories.FAUCET:
+        return "Faucet"
+    if category == Categories.SHOWER_HEAD:
+        return "Shower Head"
+    if category == Categories.TELEVISION:
+        return "Television"
+    if category == Categories.REMOTE:
+        return "Remote"
+    if category == Categories.ROUTER:
+        return "Router"
 
 
 # versiontuple("2.3.1") > versiontuple("10.1.1") -> False
@@ -173,16 +254,16 @@ class HAADevice:
         return None
 
     def getId(self) -> str:
-        return self.info['id']
+        return self.info.description.id
 
     def getIpAddress(self) -> str:
-        return self.info['address']
+        return self.info.description.addresses[0]
 
     def getName(self) -> str:
-        return self.info['name'].split('._hap')[0]
+        return self.info.description.name.split('._hap')[0]
 
     def getCategory(self) -> str:
-        return self.info['category']
+        return self.info.description.category
 
     def getRawInfo(self):
         return self.info
@@ -192,7 +273,7 @@ class HAADevice:
 
     def _getSetupWord(self):
         word = HAADevice.getCustomCommand(self.getFwVersion())
-        log.debug("FW {}-> {}".format(self.getFwVersion(),word))
+        Context.get().get_logger().debug("FW {}-> {}".format(self.getFwVersion(),word))
         return word
 
     def _getWordToReboot(self):
@@ -217,7 +298,7 @@ class HAADevice:
             for service in accessory['services']:
                 s_type = service['type']
                 s_iid = service['iid']
-                print('{aid}.{iid}: #{stype}#'.format(aid=aid, iid=s_iid, stype=ServicesTypes.get_short(s_type)))
+                print('{aid}.{iid}: #{stype}#'.format(aid=aid, iid=s_iid, stype=s_type))
 
                 for characteristic in service['characteristics']:
                     c_iid = characteristic['iid']
@@ -226,7 +307,7 @@ class HAADevice:
                     c_format = characteristic['format']
                     perms = ','.join(characteristic['perms'])
                     desc = characteristic.get('description', '')
-                    c_type = CharacteristicsTypes.get_short(c_type)
+
                     print('  {aid}.{iid}: ({description}) #{ctype}# [{perms}]'.format(aid=aid,
                                                                                       iid=c_iid,
                                                                                       ctype=c_type,
@@ -234,27 +315,27 @@ class HAADevice:
                                                                                       description=desc))
                     print('    Value: {value}'.format(value=value))
 
-    def configReboot(self):
+    async def configReboot(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToReboot())]
-        results = self.pairing.put_characteristics(characteristics, do_conversion=True)
+        results =  await self.pairing.put_characteristics(characteristics)
 
-    def configEnterSetup(self):
+    async def configEnterSetup(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToEnterSetup())]
-        results = self.pairing.put_characteristics(characteristics, do_conversion=True)
+        results = await self.pairing.put_characteristics(characteristics )
 
-    def configStartUpdate(self):
+    async def configStartUpdate(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToStartUpdate())]
-        results = self.pairing.put_characteristics(characteristics, do_conversion=True)
+        results = await self.pairing.put_characteristics(characteristics )
 
-    def configWifiReconnection(self):
+    async def configWifiReconnection(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToWifiReconnection())]
-        results = self.pairing.put_characteristics(characteristics, do_conversion=True)
+        results = await self.pairing.put_characteristics(characteristics )
 
     @staticmethod
     def getCustomCommand(version :str) -> str:
         for key, value in CustomCommands.items():
             cmp = versionCompare(version, key)
-            log.debug("comparing {},{} -> {}".format(version,key,cmp))
+            Context.get().get_logger().debug("comparing {},{} -> {}".format(version,key,cmp))
             if cmp >= 0:
                 #version > key
                 return value
@@ -303,21 +384,62 @@ class Context:
             Context.__instance.timeout = None
             Context.__instance.discoveredDevices = []
             Context.__instance.pairingfile = None
+            Context.__instance.zeroConf = AsyncZeroconf()
+            Context.__instance.controller = aiohomekit.Controller(async_zeroconf_instance=Context.__instance.zeroConf)
 
-    def discoverHAA(self, doPrint: bool = False) -> int:
-        results = Controller.discover(Context.get().get_timeout_sec())
-        for info in results:
-            if info['md'].startswith(HAA_MANUFACTURER):
-                # dev = HAADevice(info)
-                self._addHAADevice(info)
+    def load_data(self,file) :
+        try:
+            Context.__instance.controller.load_data(file)
+            return Context.__instance.controller.pairings
+        except Exception:
+            raise SystemExit
+
+    @contextlib.asynccontextmanager
+    async def get_controller(self) -> AsyncIterator[Controller]:
+
+        zeroconf = AsyncZeroconf()
+
+        controller = Controller(
+            async_zeroconf_instance=zeroconf
+        )
+
+        async with zeroconf:
+            listener = ZeroconfServiceListener()
+            browser = AsyncServiceBrowser(
+                zeroconf.zeroconf,
+                [
+                    "_hap._tcp.local.",
+                    "_hap._udp.local.",
+                ],
+                listener=listener,
+            )
+
+            async with controller:
+                yield controller
+
+            await browser.async_cancel()
+
+
+    async def discoverHAA(self, doPrint: bool = False) -> int:
+        async with self.get_controller() as controller:
+            self.controller = controller
+            await asyncio.sleep(self.get_timeout_sec())
+
+            async for discovery in controller.async_discover(self.get_timeout_sec()):
+
+                desc = discovery.description
+
+                if desc.model.startswith(HAA_MANUFACTURER):
+                    self._addHAADevice(discovery)
 
         if doPrint:
             for d in Context.__instance.discoveredDevices:
-                print("Name: {:20s} Ip: {:20s} Id: {:20s} Category: {:20s}".format(
-                    d['name'].split('._hap')[0],
-                    d['address'],
-                    d['id'],
-                    d['category']))
+                print("PairId: {:20s} Ip: {:20s} Name: {:20s} Category: {:20s}".format(
+                    d.description.id,
+                    d.description.addresses[0],
+                    d.description.name.split('._hap')[0],
+                    homekitCategoryToString( d.description.category)))
+
         return len(Context.__instance.discoveredDevices)
 
     def discoverHAAInSetupMode(self,ip4 = socket.gethostbyname(socket.gethostname())  ):
@@ -356,13 +478,13 @@ class Context:
 
     def getDiscovereHAADeviceByName(self, name: str):
         for d in Context.__instance.discoveredDevices:
-            if d['name'].split('._hap')[0] == name:
+            if d.description.name.split('._hap')[0] == name:
                 return d
         return None
 
     def getDiscovereHAADeviceById(self, id: str):
         for d in Context.__instance.discoveredDevices:
-            if d['id'] == id:
+            if d.description.id == id:
                 return d
         return None
 
@@ -386,8 +508,8 @@ def parseArguments(config: argparse.Namespace) -> None:
     ctx.logger = logging.getLogger()
     ctx.timeout = config.timeout
 
-    if config.exec == 'scan' and config.name:
-        ctx.logger.error("scan mode and name are not allowed together")
+    if config.exec == 'scan' and config.id:
+        ctx.logger.error("scan mode and ID are not allowed together")
         sys.exit(0)
 
     if config.debug:
@@ -402,14 +524,18 @@ def parseArguments(config: argparse.Namespace) -> None:
                             datefmt='%H:%M:%S',
                             level=log_level)
         handler = RotatingFileHandler(config.log[0], maxBytes=FILELOGSIZE, backupCount=5)
-        log.addHandler(handler)
+        ctx.logger.addHandler(handler)
     else:
         logging.basicConfig(format='%(asctime)s,%(levelname)s %(message)s',
                             datefmt='%H:%M:%S',
                             level=log_level)
 
 
-if __name__ == '__main__':
+
+
+
+
+async def main(argv: list[str] | None = None) -> None:
 
     unixsignal.signal(unixsignal.SIGINT, Context.get().sighandler)
 
@@ -423,18 +549,12 @@ if __name__ == '__main__':
 
     log.info("Last release: {}".format( HAADevice.getLastRelease() ))
 
-
     log.info("Discovering HAA devices in the network...")
-    devsNo = Context.get().discoverHAA(True)
 
-    controller = Controller()
-    try:
-        controller.load_data(config.file)
-    except Exception as e:
-        logging.error(e, exc_info=True)
-        sys.exit(-1)
+    devsNo = await Context.get().discoverHAA(True)
 
-    pair_devices = controller.get_pairings()
+    pair_devices = Context.get().load_data(config.file)
+
     log.info("Found {}/{} devices online..\r\n".format(devsNo,len(pair_devices)))
 
     if config.exec == 'scan':
@@ -446,29 +566,30 @@ if __name__ == '__main__':
                 Context.get().discoverHAAInSetupMode()
     else:
         ## Validate name of the device
-        if config.name != ALL_DEVICES_WILDCARD:
-            dev = Context.get().getDiscovereHAADeviceByName(config.name)
+        if config.id != ALL_DEVICES_WILDCARD:
+            dev = Context.get().getDiscovereHAADeviceById(config.id)
             if not dev:
-                log.error('"{a}" is not a valid device name found online'.format(a=config.name))
+                log.error('"{a}" is not a valid device name found online'.format(a=config.id))
                 sys.exit(-1)
 
             deviceIsPaired : bool = False
             #we found the name onlne , is it paired? get its Paired ID
             for k,v  in pair_devices.items():
-                if dev['id']  == v._get_pairing_data()['AccessoryPairingID'] :
+                if dev.description.id  == k:#v._pairing_data.get('AccessoryPairingID') :
                     deviceIsPaired = True
                     break
 
             if not deviceIsPaired :
-                log.error('"{a}" is an online device but NOT Paired'.format(a=config.name))
+                log.error('"{a}" is an online device but NOT Paired'.format(a=config.id))
                 sys.exit(-1)
         #############
 
+
         doexit: bool = False
         for k, v in pair_devices.items():
-            if config.name == ALL_DEVICES_WILDCARD or k == config.name:
+            if config.id == ALL_DEVICES_WILDCARD or k == config.id:
                 try:
-                    data = v.list_accessories_and_characteristics()
+                    data = await v.list_accessories_and_characteristics()
                 except Exception as e:
                     log.error("{} NOT online..!".format(k))
                     continue
@@ -483,13 +604,13 @@ if __name__ == '__main__':
                             for characteristic in service['characteristics']:
                                 if characteristic.get('type') == SERVICE_INFO_CHAR_NAME:
                                     name = characteristic.get('value', '')
-                                    zeroConfDev = Context.get().getDiscovereHAADeviceByName(name)
-                                    if Context.get().getDiscovereHAADeviceByName(name) is not None  :
-                                        if config.name == ALL_DEVICES_WILDCARD or config.name == name :
+                                    zeroConfDev = Context.get().getDiscovereHAADeviceById(k)
+                                    if Context.get().getDiscovereHAADeviceById(k) is not None  :
+                                        if config.id == ALL_DEVICES_WILDCARD or config.id == zeroConfDev.description.id :
                                             haaDev = HAADevice(zeroConfDev, data, v)
-                                            log.info("haa device {} handled ...".format(name))
+                                            log.info("haa device {} ({}) handled ...".format(k,name))
                                             haaDevices.append(haaDev)
-                                            if config.name != ALL_DEVICES_WILDCARD:
+                                            if config.id != ALL_DEVICES_WILDCARD:
                                                 # break on first device found if not all are considered
                                                 doexit = True
                                                 break
@@ -497,25 +618,36 @@ if __name__ == '__main__':
 
         print("")
         log.info("{} Devices Match".format(len(haaDevices)))
-        
+
         for hd in haaDevices:
             if config.exec == "reboot":
-                log.info("REBOOT Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
-                hd.configReboot()
+                log.info("REBOOT Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
+                await hd.configReboot()
             elif config.exec == "update":
-                log.info("UPDATE Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
+                log.info("UPDATE Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
                 log.info("use: nc -kulnw0 45678")
-                hd.configStartUpdate()
+                await hd.configStartUpdate()
             elif config.exec == "wifi":
-                log.info("WIFI RECONNECTION Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(),
+                log.info("WIFI RECONNECTION Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(),
                                                                                          hd.getIpAddress()))
-                hd.configWifiReconnection()
+                await hd.configWifiReconnection()
             elif config.exec == "setup":
-                log.info("SETUP Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
+                log.info("SETUP Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
                 log.info("http://{}:4567".format(hd.getIpAddress()))
-                hd.configEnterSetup()
+                await hd.configEnterSetup()
             elif config.exec == "dump":
-                log.info("DUMP Device: {:20s} Id: {:20s} Ip: {:20s}".format(hd.getName(), hd.getId(), hd.getIpAddress()))
+                log.info("DUMP Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
                 hd.dumpHomekitData()
             elif config.exec == "version":
-                log.info("Device: {:20s} Version: {:20s}".format(hd.getName(),hd.getFwVersion()))
+                log.info("Device: {}({})       Version: {:20s}".format(hd.getId(),hd.getName(),hd.getFwVersion()))
+
+
+
+def sync_main():
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            pass
+
+if __name__ == "__main__":
+        sync_main()

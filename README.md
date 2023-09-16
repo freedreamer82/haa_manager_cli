@@ -58,7 +58,7 @@ alias1..alias2 etc are only aliases for the devices : give them different names 
 There are 7 commands available : update , reboot , enter setup mode , reconnecting WIFI , dump all data device ,scan, get device FW version.
 
 ```
-usage: haa_manager_cli.py [-h] [-l log File] [-v] [-d] [-t TIMEOUT] -f FILE [-n NAME] -e {update,reboot,setup,wifi,dump,scan,version}
+usage: haa_manager_cli.py [-h] [-l log File] [-v] [-d] [-t TIMEOUT] -f FILE [-i ID] -e {update,reboot,setup,wifi,dump,scan,version}
 
 options:
   -h, --help            show this help message and exit
@@ -69,7 +69,7 @@ options:
   -t TIMEOUT, --timeout TIMEOUT
                         Number of seconds to wait
   -f FILE               File with the pairing data
-  -n NAME               name of device found online,shown on scan
+  -i ID                 pairID of device found online,shown on scan
   -e {update,reboot,setup,wifi,dump,scan}, --exec {update,reboot,setup,wifi,dump,scan}
                         type of action to execute
 ```
@@ -84,8 +84,8 @@ Scan Mode allows to discover devices (already paired in Home Assistant) in your 
 ```
 INFO Discovering HAA devices in the network..
 
-Name: HAA-AABBCC       Ip: 192.168.1.151        Id: 1F:27:12:BA:BF:58    Category: Window Covering  
-Name: HAA-786678       Ip: 192.168.1.51         Id: 6B:D5:81:BD:5B:EA    Category: Switch    
+PairId: 1F:27:12:BA:BF:xx      Name: HAA-AABBCC       Ip: 192.168.1.151           Category: Window Covering  
+PairId: 6B:D5:81:BD:5B:yy      Name: HAA-786678       Ip: 192.168.1.51            Category: Switch    
 20:26:27,INFO Found 2/2 devices online..
 
 Devices in Setup Mode:
@@ -97,12 +97,12 @@ You can also see if any device (from your pairing file) is in Setup Mode.
 
 For all operations you must use the name discovered with the scan.
 
-`python haa_manager_cli.py -f pairing-file.json -e update -n HAA-AABBCC`
+`python haa_manager_cli.py -f pairing-file.json -e update -i 1F:27:12:BA:BC:58`
 
 ```
 INFO Discovering HAA devices in the network..
-Name: HAA-AABBCC       Ip: 192.168.1.151        Id: 1F:27:12:BA:BC:58    Category: Window Covering  
-Name: HAA-786678       Ip: 192.168.1.51         Id: 6B:D5:81:BD:5B:EA    Category: Switch 
+PairId: 1F:27:12:BA:BC:58       Name: HAA-AABBCC       Ip: 192.168.1.151          Category: Window Covering  
+PairId: 6B:D5:81:BD:5B:EA       Name: HAA-786678       Ip: 192.168.1.51           Category: Switch 
 20:32:55,INFO Found 8/9 devices online..
 
 20:33:09,ERROR HAA-12345 NOT online..!
@@ -122,7 +122,7 @@ To see the update progress , as suggested , use:
 If you need to setup all devices together is possible to use "*" as a wildcard.
 For example to update all devices in the network:
 
-`python haa_manager_cli.py -f pairing-file.json -e update -n "*"`
+`python haa_manager_cli.py -f pairing-file.json -e update -i "*"`
 
 
 
