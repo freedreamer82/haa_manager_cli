@@ -62,6 +62,7 @@ FILELOGSIZE = 1024 * 1024 * 10  # 10 mb max
 ############### CUSTOM COMMANDS ##################
 #if you add something keep the order..
 CustomCommands = {
+    "12.10.3": "dt",
     "12.10.0": "bl",
     "12.9.0":  "po",
     "12.8.0":  "ic",
@@ -80,7 +81,7 @@ parser.add("-l", "--log", nargs=1, metavar=("log File"), default=False,
            help=" path file to save log")  # this option can be set in a config file because it starts with '--'
 parser.add('-v', action='version', version=VERSION + "\n" + AUTHOR)
 parser.add('-d', '--debug', action='store_true', default=False, help='debug mode')
-parser.add('-t', '--timeout', required=False, type=int, default=20, help='Number of seconds to wait')
+parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number of seconds to wait')
 parser.add('-f', action='store', required=True, dest='file', help='File with the pairing data')
 parser.add('-i', action='store', required=False, dest='id', help='pairID of device found online,shown on scan. wildcard "*" means all')
 parser.add_argument("-e", "--exec", required=True, type=str,
@@ -535,6 +536,15 @@ def parseArguments(config: argparse.Namespace) -> None:
 
 
 
+def getOnlineDevs(pair_devices,discoveredDevices):
+
+    devs = {}
+    for disc in discoveredDevices:
+        for k,v  in pair_devices.items():
+            if disc.description.id  == k:
+                   devs[str(k)] = v
+    return devs               
+
 
 
 async def main(argv: list[str] | None = None) -> None:
@@ -554,10 +564,12 @@ async def main(argv: list[str] | None = None) -> None:
     log.info("Discovering HAA devices in the network...")
 
     devsNo = await Context.get().discoverHAA(True)
-
+ 
     pair_devices = Context.get().load_data(config.file)
 
-    log.info("Found {}/{} devices online..\r\n".format(devsNo,len(pair_devices)))
+    onlineDevs = getOnlineDevs(pair_devices,Context.get().getDiscoveredHAADevices())
+
+    log.info("Found {} devices online.{} paired {} are Online\r\n".format(devsNo,len(pair_devices),len(onlineDevs)))
 
     if config.exec == 'scan':
         if devsNo!=len(pair_devices) :
@@ -588,8 +600,9 @@ async def main(argv: list[str] | None = None) -> None:
 
 
         doexit: bool = False
-        for k, v in pair_devices.items():
+        for k, v in  onlineDevs.items(): #pair_devices.items():
             if config.id == ALL_DEVICES_WILDCARD or k == config.id:
+                
                 try:
                     data = await v.list_accessories_and_characteristics()
                 except Exception as e:
