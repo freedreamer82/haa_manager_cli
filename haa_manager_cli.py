@@ -359,6 +359,8 @@ class HAADevice:
         results = await self.pairing.put_characteristics(characteristics )
 
     async def getConfigScript(self):
+        if not self.advsetupChar:
+            return None
         characteristics = [(self.advsetupChar[0], self.advsetupChar[1],self._getWordToReadScript())]
         results = await self.pairing.put_characteristics(characteristics )
         results = await self.pairing.get_characteristics( [(self.advsetupChar[0], self.advsetupChar[1])] )
