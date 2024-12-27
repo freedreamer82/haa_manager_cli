@@ -17,7 +17,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0.txt>.
 '''
 
 import argparse
-
+import base64
 import aiohomekit
 import requests
 import socket,os
@@ -52,6 +52,7 @@ CUSTOM_HAA_COMMAND = "#HAA@trcmd"
 
 HAA_CUSTOM_SERVICE = "F0000100-0218-2017-81BF-AF2B7C833922"
 HAA_CUSTOM_CONFIG_CHAR = "F0000101-0218-2017-81BF-AF2B7C833922"
+HAA_CUSTOM_ADVANCED_CONFIG_CHAR = "F0000103-0218-2017-81BF-AF2B7C833922"
 SETUP_PORT = 4567
 
 
@@ -87,7 +88,7 @@ parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number
 parser.add('-f', action='store', required=True, dest='file', help='File with the pairing data')
 parser.add('-i', action='store', required=False, dest='id', help='pairID of device found online,shown on scan. wildcard "*" means all')
 parser.add_argument("-e", "--exec", required=True, type=str,
-                    choices=['update', 'reboot', 'setup', 'wifi', 'dump', 'scan','version'],
+                    choices=['update', 'reboot', 'setup', 'wifi', 'dump', 'script','scan','version'],
                     help="type of action to execute")
 
 
@@ -202,6 +203,7 @@ class HAADevice:
         self.name = self._getname()
         self.manufacturer = self._getManufacturer()
         self.setupChar = self._getCustomSetupService()
+        self.advsetupChar = self._getAdvancedCustomSetupService()
         if self.manufacturer != self._getManufacturer():
             sys.exit(-1)
 
@@ -216,6 +218,20 @@ class HAADevice:
                         if characteristic.get('type') == HAA_CUSTOM_CONFIG_CHAR:
                             value = characteristic.get('value', '')
                             # 'aid': 1, 'iid': 65011,
+                            return [int(characteristic.get('aid')), int(characteristic.get('iid'))]
+        return None
+
+    def _getAdvancedCustomSetupService(self):
+        for accessory in self.data:
+            aid = accessory['aid']
+            for service in accessory['services']:
+                s_type = service['type']
+                s_iid = service['iid']
+                if s_type == HAA_CUSTOM_SERVICE:
+                    for characteristic in service['characteristics']:
+                        if characteristic.get('type') == HAA_CUSTOM_ADVANCED_CONFIG_CHAR:
+                            value = characteristic.get('value', '')
+                            # 'aid': 1, 'iid': 65012,
                             return [int(characteristic.get('aid')), int(characteristic.get('iid'))]
         return None
 
@@ -297,6 +313,12 @@ class HAADevice:
         # here check version to change word
         return self._getSetupWord() + "0"
 
+    def _getWordToReadScript(self):
+        # here check version to change word
+        str = self._getSetupWord() + "01 " #with extra space necessary!
+        enc = base64.b64encode(str.encode("utf-8"))
+        return enc.decode('utf-8')
+
     def dumpHomekitData(self):
         for accessory in self.data:
             aid = accessory['aid']
@@ -335,6 +357,16 @@ class HAADevice:
     async def configWifiReconnection(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToWifiReconnection())]
         results = await self.pairing.put_characteristics(characteristics )
+
+    async def getConfigScript(self):
+        characteristics = [(self.advsetupChar[0], self.advsetupChar[1],self._getWordToReadScript())]
+        results = await self.pairing.put_characteristics(characteristics )
+        results = await self.pairing.get_characteristics( [(self.advsetupChar[0], self.advsetupChar[1])] )
+        script = results.get((self.advsetupChar[0] , self.advsetupChar[1]), {}).get('value', None)
+        if script:
+           return base64.b64decode(script).decode("utf-8")
+        else:
+           return None
 
     @staticmethod
     def getCustomCommand(version :str) -> str:
@@ -655,6 +687,11 @@ async def main(argv: list[str] | None = None) -> None:
             elif config.exec == "dump":
                 log.info("DUMP Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
                 hd.dumpHomekitData()
+            elif config.exec == "script":
+                log.info("Script Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
+                script = await hd.getConfigScript()
+                print(script)
+                print()
             elif config.exec == "version":
                 log.info("Device: {}({})       Version: {:20s}".format(hd.getId(),hd.getName(),hd.getFwVersion()))
 
