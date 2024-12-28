@@ -55,13 +55,13 @@ alias1..alias2 etc are only aliases for the devices : give them different names 
 
 
 # Commands
-There are 7 commands available : update , reboot , enter setup mode , reconnecting WIFI , dump all data device ,scan, get device FW version , get script.
+There are 8 commands available : update , reboot , enter setup mode , reconnecting WIFI , dump all data device ,scan, get device FW version , get script.
 
 ```
-usage: haa_manager_cli_dev.py [-h] [-l log File] [-v] [-d] [-t TIMEOUT] -f FILE [-i ID] {script,update,reboot,setup,wifi,dump,scan} ...
+usage: haa_manager_cli.py [-h] [-l log File] [-v] [-d] [-t TIMEOUT] -f FILE [-i ID] {script,update,reboot,setup,wifi,dump,scan,version} ...
 
 positional arguments:
-  {script,update,reboot,setup,wifi,dump,scan}
+  {script,update,reboot,setup,wifi,dump,scan,version}
                         Commands to execute
     script              Run a script action
     update              Update action
@@ -70,6 +70,7 @@ positional arguments:
     wifi                WiFi action
     dump                Dump action
     scan                Scan action
+    version             get version action
 
 options:
   -h, --help            show this help message and exit
