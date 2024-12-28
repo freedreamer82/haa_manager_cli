@@ -55,10 +55,21 @@ alias1..alias2 etc are only aliases for the devices : give them different names 
 
 
 # Commands
-There are 7 commands available : update , reboot , enter setup mode , reconnecting WIFI , dump all data device ,scan, get device FW version.
+There are 7 commands available : update , reboot , enter setup mode , reconnecting WIFI , dump all data device ,scan, get device FW version , get script.
 
 ```
-usage: haa_manager_cli.py [-h] [-l log File] [-v] [-d] [-t TIMEOUT] -f FILE [-i ID] -e {update,reboot,setup,wifi,dump,scan,version}
+usage: haa_manager_cli_dev.py [-h] [-l log File] [-v] [-d] [-t TIMEOUT] -f FILE [-i ID] {script,update,reboot,setup,wifi,dump,scan} ...
+
+positional arguments:
+  {script,update,reboot,setup,wifi,dump,scan}
+                        Commands to execute
+    script              Run a script action
+    update              Update action
+    reboot              Reboot action
+    setup               Setup action
+    wifi                WiFi action
+    dump                Dump action
+    scan                Scan action
 
 options:
   -h, --help            show this help message and exit
@@ -69,16 +80,15 @@ options:
   -t TIMEOUT, --timeout TIMEOUT
                         Number of seconds to wait
   -f FILE               File with the pairing data
-  -i ID                 pairID of device found online,shown on scan
-  -e {update,reboot,setup,wifi,dump,scan}, --exec {update,reboot,setup,wifi,dump,scan}
-                        type of action to execute
+  -i ID                 pairID of device found online,shown on scan. wildcard "*" means all
+
 ```
 
 # Scan
 
 Scan Mode allows to discover devices (already paired in Home Assistant) in your network.
 
-`sudo python haa_manager_cli.py -f pairing-file.json -e scan`
+`sudo python haa_manager_cli.py -f pairing-file.json scan`
 
 
 ```
@@ -97,7 +107,7 @@ You can also see if any device (from your pairing file) is in Setup Mode.
 
 For all operations you must use the name discovered with the scan.
 
-`python haa_manager_cli.py -f pairing-file.json -e update -i 1F:27:12:BA:BC:58`
+`python haa_manager_cli.py -f pairing-file.json -i 1F:27:12:BA:BC:58 update`
 
 ```
 INFO Discovering HAA devices in the network..
@@ -122,7 +132,7 @@ To see the update progress , as suggested , use:
 If you need to setup all devices together is possible to use "*" as a wildcard.
 For example to update all devices in the network:
 
-`python haa_manager_cli.py -f pairing-file.json -e update -i "*"`
+`python haa_manager_cli.py -f pairing-file.json -i "*" update`
 
 
 
