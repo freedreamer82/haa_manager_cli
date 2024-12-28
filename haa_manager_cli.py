@@ -79,7 +79,6 @@ CustomCommands = {
 
 
 parser = configargparse.ArgParser(default_config_files=[''])
-# parser.add('-c', '--my-config', required=False, is_config_file=True, help='config file path')
 parser.add("-l", "--log", nargs=1, metavar=("log File"), default=False,
            help=" path file to save log")  # this option can be set in a config file because it starts with '--'
 parser.add('-v', action='version', version=VERSION + "\n" + AUTHOR)
@@ -87,10 +86,19 @@ parser.add('-d', '--debug', action='store_true', default=False, help='debug mode
 parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number of seconds to wait')
 parser.add('-f', action='store', required=True, dest='file', help='File with the pairing data')
 parser.add('-i', action='store', required=False, dest='id', help='pairID of device found online,shown on scan. wildcard "*" means all')
-parser.add_argument("-e", "--exec", required=True, type=str,
-                    choices=['update', 'reboot', 'setup', 'wifi', 'dump', 'script','scan','version'],
-                    help="type of action to execute")
 
+subparsers = parser.add_subparsers(dest='command', required=True, help="Commands to execute")
+
+script_parser = subparsers.add_parser('script', help="Run a script action")
+
+script_parser.add_argument('params', nargs=argparse.REMAINDER, help="Parameters for the script")
+
+update_parser = subparsers.add_parser('update', help="Update action")
+reboot_parser = subparsers.add_parser('reboot', help="Reboot action")
+setup_parser = subparsers.add_parser('setup', help="Setup action")
+wifi_parser = subparsers.add_parser('wifi', help="WiFi action")
+dump_parser = subparsers.add_parser('dump', help="Dump action")
+scan_parser = subparsers.add_parser('scan', help="Scan action")
 
 
 
@@ -547,7 +555,7 @@ def parseArguments(config: argparse.Namespace) -> None:
     ctx.logger = logging.getLogger()
     ctx.timeout = config.timeout
 
-    if config.exec == 'scan' and config.id:
+    if config.command == 'scan' and config.id:
         ctx.logger.error("scan mode and ID are not allowed together")
         sys.exit(0)
 
@@ -607,7 +615,7 @@ async def main(argv: list[str] | None = None) -> None:
 
     log.info("Found {} devices online.{} paired {} are Online\r\n".format(devsNo,len(pair_devices),len(onlineDevs)))
 
-    if config.exec == 'scan':
+    if config.command == 'scan':
         if devsNo!=len(pair_devices) :
             if not 'SUDO_UID' in os.environ.keys():
                 print("WARNING!!for setup mode scanning feature,the script it requires sudo")
@@ -671,30 +679,33 @@ async def main(argv: list[str] | None = None) -> None:
         log.info("{} Devices Match".format(len(haaDevices)))
 
         for hd in haaDevices:
-            if config.exec == "reboot":
+            if config.command == "reboot":
                 log.info("REBOOT Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
                 await hd.configReboot()
-            elif config.exec == "update":
+            elif config.command == "update":
                 log.info("UPDATE Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
                 log.info("use: nc -kulnw0 45678")
                 await hd.configStartUpdate()
-            elif config.exec == "wifi":
+            elif config.command == "wifi":
                 log.info("WIFI RECONNECTION Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(),
                                                                                          hd.getIpAddress()))
                 await hd.configWifiReconnection()
-            elif config.exec == "setup":
+            elif config.command == "setup":
                 log.info("SETUP Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
                 log.info("http://{}:4567".format(hd.getIpAddress()))
                 await hd.configEnterSetup()
-            elif config.exec == "dump":
+            elif config.command == "dump":
                 log.info("DUMP Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
                 hd.dumpHomekitData()
-            elif config.exec == "script":
-                log.info("Script Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
-                script = await hd.getConfigScript()
-                print(script)
-                print()
-            elif config.exec == "version":
+            elif config.command == "script":
+                if config.params:
+                     print(f"Running script with parameters: {config.params}")
+                else:
+                    log.info("Script Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
+                    script = await hd.getConfigScript()
+                    print(script)
+                    print()
+            elif config.command == "version":
                 log.info("Device: {}({})       Version: {:20s}".format(hd.getId(),hd.getName(),hd.getFwVersion()))
 
 
