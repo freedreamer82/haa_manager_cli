@@ -99,7 +99,7 @@ setup_parser = subparsers.add_parser('setup', help="Setup action")
 wifi_parser = subparsers.add_parser('wifi', help="WiFi action")
 dump_parser = subparsers.add_parser('dump', help="Dump action")
 scan_parser = subparsers.add_parser('scan', help="Scan action")
-
+version_parser = subparsers.add_parser('version', help="get version action")
 
 
 def homekitCategoryToString( category : int) -> str :
