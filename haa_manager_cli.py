@@ -26,7 +26,9 @@ from logging.handlers import RotatingFileHandler
 import configargparse
 import urllib.request
 from scapy.all import ARP, Ether, srp
-
+import socket
+import requests
+from concurrent.futures import ThreadPoolExecutor
 import argparse
 import asyncio
 from collections.abc import AsyncIterator
@@ -101,6 +103,14 @@ dump_parser = subparsers.add_parser('dump', help="Dump action")
 scan_parser = subparsers.add_parser('scan', help="Scan action")
 version_parser = subparsers.add_parser('version', help="get version action")
 
+
+def get_local_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))  # Connessione fittizia a Google DNS
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"  # Fallback in caso di errore
 
 def homekitCategoryToString( category : int) -> str :
     if category == Categories.OTHER :
@@ -387,7 +397,7 @@ class HAADevice:
                 #version > key
                 return value
 
-        return CUSTOM_HAA_COMMAND   
+        return CUSTOM_HAA_COMMAND
 
     @staticmethod
     def getLastRelease() -> str:
@@ -489,33 +499,34 @@ class Context:
 
         return len(Context.__instance.discoveredDevices)
 
-    def discoverHAAInSetupMode(self,ip4 = socket.gethostbyname(socket.gethostname())  ):
+    def discoverHAAInSetupMode(self,ip4 = None ):
+            if not ip4:
+                ip4 = get_local_ip()
+            Context.get().get_logger().debug(f"My IP: {ip4}")    
+            base_ip = ".".join(ip4.split(".")[:3])  # Es: "192.168.1.1" -> "192.168.1"
+            timeout = 0.8 
+            
+            def scan_ip(ip):
+                try:
+                    with socket.create_connection((ip, SETUP_PORT), timeout):
+                        return ip  #LETS CONSIDER IN setup mode if connection is ok
+                except (socket.timeout, socket.error):
+                    return None
 
-        target_ip = "{}/24".format(ip4)
-        #  target_ip = "192.168.1.1/24".format(ip4)
-        # IP Address for the destination
-        # create ARP packet
-        arp = ARP(pdst=target_ip)
-        # create the Ether broadcast packet
-        # ff:ff:ff:ff:ff:ff MAC address indicates broadcasting
-        ether = Ether(dst="ff:ff:ff:ff:ff:ff")
-        # stack them
-        packet = ether/arp
+            ip_range = [f"{base_ip}.{i}" for i in range(1, 255)]
+            devices_in_setup = []
 
-        result = srp(packet, timeout=3, verbose=0)[0]
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                results = executor.map(scan_ip, ip_range)
 
-        # a list of clients, we will fill this in the upcoming loop
-        clients = []
+            for ip in results:
+                if ip:
+                    devices_in_setup.append(ip)
 
-        for sent, received in result:
-            # for each response, append ip and mac address to `clients` list
-            clients.append({'ip': received.psrc, 'mac': received.hwsrc})
-
-        print("Devices in Setup Mode:")
-        for client in clients:
-            if HAADevice.isInSetupMode(client['ip']):
-                url = "http://{}:4567".format(client['ip'])
-                print("{:16}    Mac:{}    {}".format(client['ip'], client['mac'],url))
+            print("Devices in Setup Mode:")
+            for device_ip in devices_in_setup:
+                url = f"http://{device_ip}:4567"
+                print(f"{device_ip:16} URL: {url}")  
 
     def _addHAADevice(self, device):
         Context.__instance.discoveredDevices.append(device)
@@ -587,7 +598,7 @@ def getOnlineDevs(pair_devices,discoveredDevices):
         for k,v  in pair_devices.items():
             if disc.description.id  == k:
                    devs[str(k)] = v
-    return devs               
+    return devs
 
 
 
@@ -608,7 +619,7 @@ async def main(argv: list[str] | None = None) -> None:
     log.info("Discovering HAA devices in the network...")
 
     devsNo = await Context.get().discoverHAA(True)
- 
+
     pair_devices = Context.get().load_data(config.file)
 
     onlineDevs = getOnlineDevs(pair_devices,Context.get().getDiscoveredHAADevices())
@@ -616,12 +627,7 @@ async def main(argv: list[str] | None = None) -> None:
     log.info("Found {} devices online.{} paired {} are Online\r\n".format(devsNo,len(pair_devices),len(onlineDevs)))
 
     if config.command == 'scan':
-        if devsNo!=len(pair_devices) :
-            if not 'SUDO_UID' in os.environ.keys():
-                print("WARNING!!for setup mode scanning feature,the script it requires sudo")
-                sys.exit(1)
-            else:
-                Context.get().discoverHAAInSetupMode()
+        Context.get().discoverHAAInSetupMode()
     else:
         ## Validate name of the device
         if config.id != ALL_DEVICES_WILDCARD:
@@ -646,7 +652,7 @@ async def main(argv: list[str] | None = None) -> None:
         doexit: bool = False
         for k, v in  onlineDevs.items(): #pair_devices.items():
             if config.id == ALL_DEVICES_WILDCARD or k == config.id:
-                
+
                 try:
                     data = await v.list_accessories_and_characteristics()
                 except Exception as e:
