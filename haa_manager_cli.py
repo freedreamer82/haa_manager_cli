@@ -65,7 +65,7 @@ FILELOGSIZE = 1024 * 1024 * 10  # 10 mb max
 ############### CUSTOM COMMANDS ##################
 #if you add something keep the order..
 CustomCommands = {
-    "12.14.7": "ks",
+    "12.14.6": "ks",
     "12.14.0": "pt",
     "12.12.6": "io",
     "12.10.3": "dt",
