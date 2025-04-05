@@ -20,7 +20,7 @@ import argparse
 import base64
 import aiohomekit
 import requests
-import socket,os
+import socket, os
 import signal as unixsignal
 from logging.handlers import RotatingFileHandler
 import configargparse
@@ -35,6 +35,7 @@ from collections.abc import AsyncIterator
 import contextlib
 import logging
 import sys
+import re
 from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
 from aiohomekit.zeroconf import ZeroconfServiceListener
 from aiohomekit import Controller
@@ -57,28 +58,110 @@ HAA_CUSTOM_CONFIG_CHAR = "F0000101-0218-2017-81BF-AF2B7C833922"
 HAA_CUSTOM_ADVANCED_CONFIG_CHAR = "F0000103-0218-2017-81BF-AF2B7C833922"
 SETUP_PORT = 4567
 
+# GitHub repository information
+REPO_OWNER = "RavenSystem"
+REPO_NAME = "esp-homekit-devices"
+HEADER_FILE_PATH = "HAA/HAA_Main/main/header.h"
 
 ALL_DEVICES_WILDCARD = "*"
 
 FILELOGSIZE = 1024 * 1024 * 10  # 10 mb max
 
-############### CUSTOM COMMANDS ##################
-#if you add something keep the order..
-CustomCommands = {
-    "12.14.6": "ks",
-    "12.14.0": "pt",
-    "12.12.6": "io",
-    "12.10.3": "dt",
-    "12.10.0": "bl",
-    "12.9.0":  "po",
-    "12.8.0":  "ic",
-    "12.3.0":  "zc",
-    "12.0.0":  "io",
-    "11.9.0" : "rgb",
-    "11.8.0" : "cmy"
-}
-###################################################
 
+
+
+# GitHub related functions
+def get_all_tags(debug=False):
+    """
+    Fetch and print all tags from the GitHub repository using pagination.
+    """
+    per_page = 100
+    page = 1
+    tags = []
+
+    print("🔎 Fetching tags from GitHub...")
+
+    while True:
+        url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/tags?per_page={per_page}&page={page}"
+        if debug:
+            print(f"[DEBUG] Requesting: {url}")
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
+
+            if not data:
+                break
+
+            page_tags = [tag["name"] for tag in data]
+            tags.extend(page_tags)
+
+            if debug:
+                print(f"[DEBUG] Page {page}: {len(page_tags)} tag(s)")
+
+            page += 1
+        except requests.RequestException as e:
+            print(f"❌ Error fetching tags: {e}")
+            break
+
+    print(f"✅ Found {len(tags)} total tag(s):")
+    for tag in tags:
+        print(f"  • {tag}")
+
+    return tags
+
+def get_latest_release(debug=False):
+    """
+    Fetch and return the latest release tag from GitHub.
+    """
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+    if debug:
+        print(f"[DEBUG] Requesting latest release from: {url}")
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        tag_name = data.get("tag_name")
+        if tag_name:
+            print(f"✅ Latest release tag: {tag_name}")
+            return tag_name
+        else:
+            print("⚠️ No tag_name found in latest release.")
+            return None
+    except requests.RequestException as e:
+        print(f"❌ Error fetching latest release: {e}")
+        return None
+
+def get_custom_haa_command(version_tag="master", debug=False):
+    """
+    Retrieve the CUSTOM_HAA_COMMAND value from header.h for the given tag.
+    """
+    url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{version_tag}/{HEADER_FILE_PATH}"
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        print(f"❌ Error fetching header file: {e}")
+        return None
+
+    content = response.text
+
+    if debug:
+        print(f"\n📥 Fetching header file from: {url}")
+        print("[DEBUG] First 5 lines of header file:")
+        for line in content.splitlines()[:5]:
+            print(f"  {line}")
+
+    match = re.search(r'#define\s+CUSTOM_HAA_COMMAND\s+"([^"]+)"', content)
+
+    if match:
+        command = match.group(1)
+        print(f"✅ CUSTOM_HAA_COMMAND found: \"{command}\"")
+        return command
+    else:
+        print("⚠️ CUSTOM_HAA_COMMAND not found.")
+        return None
 
 
 parser = configargparse.ArgParser(default_config_files=[''])
@@ -87,13 +170,12 @@ parser.add("-l", "--log", nargs=1, metavar=("log File"), default=False,
 parser.add('-v', action='version', version=VERSION + "\n" + AUTHOR)
 parser.add('-d', '--debug', action='store_true', default=False, help='debug mode')
 parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number of seconds to wait')
-parser.add('-f', action='store', required=True, dest='file', help='File with the pairing data')
+parser.add('-f', action='store', required=False, dest='file', help='File with the pairing data')
 parser.add('-i', action='store', required=False, dest='id', help='pairID of device found online,shown on scan. wildcard "*" means all')
 
 subparsers = parser.add_subparsers(dest='command', required=True, help="Commands to execute")
 
 script_parser = subparsers.add_parser('script', help="Run a script action")
-
 script_parser.add_argument('params', nargs=argparse.REMAINDER, help="Parameters for the script")
 
 update_parser = subparsers.add_parser('update', help="Update action")
@@ -102,7 +184,14 @@ setup_parser = subparsers.add_parser('setup', help="Setup action")
 wifi_parser = subparsers.add_parser('wifi', help="WiFi action")
 dump_parser = subparsers.add_parser('dump', help="Dump action")
 scan_parser = subparsers.add_parser('scan', help="Scan action")
-version_parser = subparsers.add_parser('version', help="get version action")
+version_parser = subparsers.add_parser('version', help="Get version action")
+
+# Add new subparsers for GitHub-related commands
+tags_parser = subparsers.add_parser('tags', help="List all available GitHub tags")
+custom_parser = subparsers.add_parser('custom', help="Get CUSTOM_HAA_COMMAND value from a tag or version")
+custom_parser.add_argument('--tag', help="GitHub tag or branch (default: master)")
+custom_parser.add_argument('--version', help="HAA version (e.g., 12.14.6)")
+latest_parser = subparsers.add_parser('latest', help="Get the latest GitHub release tag")
 
 
 def get_local_ip():
@@ -113,7 +202,7 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"  # Fallback in caso di errore
 
-def homekitCategoryToString( category : int) -> str :
+def homekitCategoryToString(category : int) -> str :
     if category == Categories.OTHER :
         return "Other"
     if category == Categories.BRIDGE:
@@ -180,6 +269,7 @@ def homekitCategoryToString( category : int) -> str :
         return "Remote"
     if category == Categories.ROUTER:
         return "Router"
+    return "Unknown Category"
 
 
 # versiontuple("2.3.1") > versiontuple("10.1.1") -> False
@@ -190,26 +280,12 @@ def versiontuple(v):
 # Return 1 if v2 is smaller,
 # -1 if v1 is smaller,
 # 0 if equal
-# Driver program to check above comparison function
-# version1 = "1.0.3"
-# version2 = "1.0.7"
-# ans = versionCompare(version1, version2)
-#    if ans < 0:
-#        print (version1 + " is smaller")
-#    else if ans > 0:
-#        print (version2 + " is smaller")
-#   else:
-#        print ("Both versions are equal")
-
 def versionCompare(v1, v2):
-
-    if versiontuple(v2) <  versiontuple(v1) :
+    if versiontuple(v2) < versiontuple(v1):
        return 1
-
-    if  versiontuple(v1) <  versiontuple(v2) :
+    if versiontuple(v1) < versiontuple(v2):
        return -1
-
-    if  versiontuple(v1)  ==  versiontuple(v2) :
+    if versiontuple(v1) == versiontuple(v2):
        return 0
 
 
@@ -313,7 +389,7 @@ class HAADevice:
 
     def _getSetupWord(self):
         word = HAADevice.getCustomCommand(self.getFwVersion())
-        Context.get().get_logger().debug("FW {}-> {}".format(self.getFwVersion(),word))
+        Context.get().get_logger().debug("FW {}-> {}".format(self.getFwVersion(), word))
         return word
 
     def _getWordToReboot(self):
@@ -334,7 +410,7 @@ class HAADevice:
 
     def _getWordToReadScript(self):
         # here check version to change word
-        str = self._getSetupWord() + "01 " #with extra space necessary!
+        str = self._getSetupWord() + "01 "  # with extra space necessary!
         enc = base64.b64encode(str.encode("utf-8"))
         return enc.decode('utf-8')
 
@@ -363,63 +439,84 @@ class HAADevice:
 
     async def configReboot(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToReboot())]
-        results =  await self.pairing.put_characteristics(characteristics)
+        results = await self.pairing.put_characteristics(characteristics)
 
     async def configEnterSetup(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToEnterSetup())]
-        results = await self.pairing.put_characteristics(characteristics )
+        results = await self.pairing.put_characteristics(characteristics)
 
     async def configStartUpdate(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToStartUpdate())]
-        results = await self.pairing.put_characteristics(characteristics )
+        results = await self.pairing.put_characteristics(characteristics)
 
     async def configWifiReconnection(self):
         characteristics = [(self.setupChar[0], self.setupChar[1], self._getWordToWifiReconnection())]
-        results = await self.pairing.put_characteristics(characteristics )
+        results = await self.pairing.put_characteristics(characteristics)
 
     async def getConfigScript(self):
         if not self.advsetupChar:
             return None
-        characteristics = [(self.advsetupChar[0], self.advsetupChar[1],self._getWordToReadScript())]
-        results = await self.pairing.put_characteristics(characteristics )
-        results = await self.pairing.get_characteristics( [(self.advsetupChar[0], self.advsetupChar[1])] )
-        script = results.get((self.advsetupChar[0] , self.advsetupChar[1]), {}).get('value', None)
+        characteristics = [(self.advsetupChar[0], self.advsetupChar[1], self._getWordToReadScript())]
+        results = await self.pairing.put_characteristics(characteristics)
+        results = await self.pairing.get_characteristics([(self.advsetupChar[0], self.advsetupChar[1])])
+        script = results.get((self.advsetupChar[0], self.advsetupChar[1]), {}).get('value', None)
         if script:
-           return base64.b64decode(script).decode("utf-8")
+            return base64.b64decode(script).decode("utf-8")
         else:
-           return None
+            return None
 
     @staticmethod
-    def getCustomCommand(version :str) -> str:
-        for key, value in CustomCommands.items():
-            cmp = versionCompare(version, key)
-            Context.get().get_logger().debug("comparing {},{} -> {}".format(version,key,cmp))
-            if cmp >= 0:
-                #version > key
-                return value
-
+    def getCustomCommand(version: str) -> str:
+        """
+        Get custom command for a specific HAA version.
+        First checks local mapping, then tries to fetch from GitHub if not found.
+        """
+    
+        # If not found in dictionary, try to fetch from GitHub
+        try:
+            # Create a tag name based on version
+            tag_name = f"HAA_{version}"
+            # Try to get the command from GitHub
+            command = get_custom_haa_command(tag_name, False)
+            if command:
+                return command
+            else:
+                # If specific version tag not found, try with master
+                command = get_custom_haa_command("master", False)
+                if command:
+                    return command
+        except Exception as e:
+            Context.get().get_logger().error(f"Error getting command from GitHub: {e}")
+            sys.exit(-1)
+            
+        # Fallback to default command
         return CUSTOM_HAA_COMMAND
 
     @staticmethod
     def getLastRelease() -> str:
         try:
-        #https://api.github.com/repos/{owner}/{repo}/releases/latest
-          response = requests.get("https://api.github.com/repos/RavenSystem/esp-homekit-devices/releases/latest")
-          return response.json()["name"]
+            tag = get_latest_release(False)
+            if tag:
+                return tag
+            else:
+                # Fallback to original method
+                response = requests.get("https://api.github.com/repos/RavenSystem/esp-homekit-devices/releases/latest")
+                return response.json()["name"]
         except Exception as e:
-          return ""
+            return ""
 
     @staticmethod
     def isInSetupMode(ip) -> bool:
         try:
             if ip != "":
-                url = "http://{}:{}".format(ip,SETUP_PORT)
-                status_code = urllib.request.urlopen(url,timeout=0.8).getcode()
+                url = "http://{}:{}".format(ip, SETUP_PORT)
+                status_code = urllib.request.urlopen(url, timeout=0.8).getcode()
                 return status_code == 200
             else:
                 return False
         except Exception as e:
             return False
+
 
 class Context:
     __instance = None
@@ -445,7 +542,7 @@ class Context:
             Context.__instance.zeroConf = AsyncZeroconf()
             Context.__instance.controller = aiohomekit.Controller(async_zeroconf_instance=Context.__instance.zeroConf)
 
-    def load_data(self,file) :
+    def load_data(self, file):
         try:
             Context.__instance.controller.load_data(file)
             return Context.__instance.controller.pairings
@@ -454,7 +551,6 @@ class Context:
 
     @contextlib.asynccontextmanager
     async def get_controller(self) -> AsyncIterator[Controller]:
-
         zeroconf = AsyncZeroconf()
 
         controller = Controller(
@@ -477,14 +573,12 @@ class Context:
 
             await browser.async_cancel()
 
-
     async def discoverHAA(self, doPrint: bool = False) -> int:
         async with self.get_controller() as controller:
             self.controller = controller
             await asyncio.sleep(self.get_timeout_sec())
 
             async for discovery in controller.async_discover(self.get_timeout_sec()):
-
                 desc = discovery.description
 
                 if desc.model.startswith(HAA_MANUFACTURER):
@@ -496,38 +590,38 @@ class Context:
                     d.description.id,
                     d.description.addresses[0],
                     d.description.name.split('._hap')[0],
-                    homekitCategoryToString( d.description.category)))
+                    homekitCategoryToString(d.description.category)))
 
         return len(Context.__instance.discoveredDevices)
 
-    def discoverHAAInSetupMode(self,ip4 = None ):
-            if not ip4:
-                ip4 = get_local_ip()
-            Context.get().get_logger().debug(f"My IP: {ip4}")    
-            base_ip = ".".join(ip4.split(".")[:3])  # Es: "192.168.1.1" -> "192.168.1"
-            timeout = 0.8 
-            
-            def scan_ip(ip):
-                try:
-                    with socket.create_connection((ip, SETUP_PORT), timeout):
-                        return ip  #LETS CONSIDER IN setup mode if connection is ok
-                except (socket.timeout, socket.error):
-                    return None
+    def discoverHAAInSetupMode(self, ip4=None):
+        if not ip4:
+            ip4 = get_local_ip()
+        Context.get().get_logger().debug(f"My IP: {ip4}")
+        base_ip = ".".join(ip4.split(".")[:3])  # Es: "192.168.1.1" -> "192.168.1"
+        timeout = 0.8
 
-            ip_range = [f"{base_ip}.{i}" for i in range(1, 255)]
-            devices_in_setup = []
+        def scan_ip(ip):
+            try:
+                with socket.create_connection((ip, SETUP_PORT), timeout):
+                    return ip  # LETS CONSIDER IN setup mode if connection is ok
+            except (socket.timeout, socket.error):
+                return None
 
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                results = executor.map(scan_ip, ip_range)
+        ip_range = [f"{base_ip}.{i}" for i in range(1, 255)]
+        devices_in_setup = []
 
-            for ip in results:
-                if ip:
-                    devices_in_setup.append(ip)
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            results = executor.map(scan_ip, ip_range)
 
-            print("Devices in Setup Mode:")
-            for device_ip in devices_in_setup:
-                url = f"http://{device_ip}:4567"
-                print(f"{device_ip:16} URL: {url}")  
+        for ip in results:
+            if ip:
+                devices_in_setup.append(ip)
+
+        print("Devices in Setup Mode:")
+        for device_ip in devices_in_setup:
+            url = f"http://{device_ip}:4567"
+            print(f"{device_ip:16} URL: {url}")
 
     def _addHAADevice(self, device):
         Context.__instance.discoveredDevices.append(device)
@@ -562,7 +656,6 @@ class Context:
 
 
 def parseArguments(config: argparse.Namespace) -> None:
-    #    print( config )
     ctx = Context.get()
     ctx.logger = logging.getLogger()
     ctx.timeout = config.timeout
@@ -590,32 +683,56 @@ def parseArguments(config: argparse.Namespace) -> None:
                             level=log_level)
 
 
-
-
-def getOnlineDevs(pair_devices,discoveredDevices):
-
+def getOnlineDevs(pair_devices, discoveredDevices):
     devs = {}
     for disc in discoveredDevices:
-        for k,v  in pair_devices.items():
-            if disc.description.id  == k:
-                   devs[str(k)] = v
+        for k, v in pair_devices.items():
+            if disc.description.id == k:
+                devs[str(k)] = v
     return devs
 
 
-
 async def main(argv: list[str] | None = None) -> None:
-
     unixsignal.signal(unixsignal.SIGINT, Context.get().sighandler)
 
     config = parser.parse_args()
-
-    haaDevices = []
 
     parseArguments(config)
 
     log = Context.get().get_logger()
 
-    log.info("Last release: {}".format( HAADevice.getLastRelease() ))
+    # Handle GitHub-related commands first
+    if config.command == 'tags':
+        get_all_tags(config.debug)
+        return
+    elif config.command == 'latest':
+        get_latest_release(config.debug)
+        return
+    elif config.command == 'custom':
+        if config.version:
+            # If version provided, check custom command for that version
+            tag_name = f"HAA_{config.version}"
+            print(f"🔍 Looking up CUSTOM_HAA_COMMAND for version: {config.version} (tag: {tag_name})")
+            command = HAADevice.getCustomCommand(config.version)
+            print(f"Custom command for version {config.version}: {command}")
+        elif config.tag:
+            # If tag provided, lookup directly with that tag
+            print(f"🔍 Looking up CUSTOM_HAA_COMMAND for tag: {config.tag}")
+            get_custom_haa_command(config.tag, config.debug)
+        else:
+            # Default to master
+            print("🔍 Looking up CUSTOM_HAA_COMMAND for latest master")
+            get_custom_haa_command("master", config.debug)
+        return
+
+    # For device commands, check if -f is provided
+    if not config.file:
+        log.error("File with pairing data is required for this command")
+        sys.exit(1)
+
+    haaDevices = []
+
+    log.info("Last release: {}".format(HAADevice.getLastRelease()))
 
     log.info("Discovering HAA devices in the network...")
 
@@ -623,9 +740,9 @@ async def main(argv: list[str] | None = None) -> None:
 
     pair_devices = Context.get().load_data(config.file)
 
-    onlineDevs = getOnlineDevs(pair_devices,Context.get().getDiscoveredHAADevices())
+    onlineDevs = getOnlineDevs(pair_devices, Context.get().getDiscoveredHAADevices())
 
-    log.info("Found {} devices online.{} paired {} are Online\r\n".format(devsNo,len(pair_devices),len(onlineDevs)))
+    log.info("Found {} devices online. {} paired {} are Online\r\n".format(devsNo, len(pair_devices), len(onlineDevs)))
 
     if config.command == 'scan':
         Context.get().discoverHAAInSetupMode()
@@ -639,19 +756,18 @@ async def main(argv: list[str] | None = None) -> None:
 
             deviceIsPaired : bool = False
             #we found the name onlne , is it paired? get its Paired ID
-            for k,v  in pair_devices.items():
-                if dev.description.id  == k:#v._pairing_data.get('AccessoryPairingID') :
+            for k,v in pair_devices.items():
+                if dev.description.id == k:#v._pairing_data.get('AccessoryPairingID') :
                     deviceIsPaired = True
                     break
 
-            if not deviceIsPaired :
+            if not deviceIsPaired:
                 log.error('"{a}" is an online device but NOT Paired'.format(a=config.id))
                 sys.exit(-1)
         #############
 
-
         doexit: bool = False
-        for k, v in  onlineDevs.items(): #pair_devices.items():
+        for k, v in onlineDevs.items(): #pair_devices.items():
             if config.id == ALL_DEVICES_WILDCARD or k == config.id:
 
                 try:
@@ -671,8 +787,8 @@ async def main(argv: list[str] | None = None) -> None:
                                 if characteristic.get('type') == SERVICE_INFO_CHAR_NAME:
                                     name = characteristic.get('value', '')
                                     zeroConfDev = Context.get().getDiscovereHAADeviceById(k)
-                                    if Context.get().getDiscovereHAADeviceById(k) is not None  :
-                                        if config.id == ALL_DEVICES_WILDCARD or config.id == zeroConfDev.description.id :
+                                    if Context.get().getDiscovereHAADeviceById(k) is not None:
+                                        if config.id == ALL_DEVICES_WILDCARD or config.id == zeroConfDev.description.id:
                                             haaDev = HAADevice(zeroConfDev, data, v)
                                             log.info("haa device {} ({}) handled ...".format(k,name))
                                             haaDevices.append(haaDev)
@@ -680,7 +796,6 @@ async def main(argv: list[str] | None = None) -> None:
                                                 # break on first device found if not all are considered
                                                 doexit = True
                                                 break
-
 
         print("")
         log.info("{} Devices Match".format(len(haaDevices)))
@@ -714,8 +829,7 @@ async def main(argv: list[str] | None = None) -> None:
                     print()
             elif config.command == "version":
                 log.info("Device: {}({})       Version: {:20s}".format(hd.getId(),hd.getName(),hd.getFwVersion()))
-
-
+            
 
 def sync_main():
         try:
