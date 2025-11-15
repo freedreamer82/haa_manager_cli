@@ -171,7 +171,7 @@ parser.add('-v', action='version', version=VERSION + "\n" + AUTHOR)
 parser.add('-d', '--debug', action='store_true', default=False, help='debug mode')
 parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number of seconds to wait')
 parser.add('-f', action='store', required=False, dest='file', help='File with the pairing data')
-parser.add('-i', action='store', required=False, dest='id', help='pairID of device found online,shown on scan. wildcard "*" means all')
+parser.add('-i', action='store', required=False, dest='id', default=ALL_DEVICES_WILDCARD, help='pairID of device found online,shown on scan. wildcard "*" means all')
 
 subparsers = parser.add_subparsers(dest='command', required=True, help="Commands to execute")
 
@@ -660,7 +660,7 @@ def parseArguments(config: argparse.Namespace) -> None:
     ctx.logger = logging.getLogger()
     ctx.timeout = config.timeout
 
-    if config.command == 'scan' and config.id:
+    if config.command == 'scan' and config.id and config.id != ALL_DEVICES_WILDCARD:
         ctx.logger.error("scan mode and ID are not allowed together")
         sys.exit(0)
 
