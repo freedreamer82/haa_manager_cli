@@ -805,9 +805,34 @@ async def main(argv: list[str] | None = None) -> None:
                 log.info("REBOOT Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
                 await hd.configReboot()
             elif config.command == "update":
-                log.info("UPDATE Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
-                log.info("use: nc -kulnw0 45678")
-                await hd.configStartUpdate()
+                # Check device current firmware version against latest release
+                device_fw = hd.getFwVersion()
+                latest_tag = HAADevice.getLastRelease()
+                
+                # Extract numeric version from tag (e.g. "HAA_12.14.6" -> "12.14.6")
+                latest_ver = None
+                if latest_tag:
+                    m = re.search(r'(\d+(?:\.\d+)+)', str(latest_tag))
+                    latest_ver = m.group(1) if m else latest_tag
+
+                # Compare versions to decide if update is needed
+                needs_update = True
+                if device_fw and latest_ver:
+                    try:
+                        # Use version comparison function (0 means equal)
+                        same_version = (versionCompare(device_fw, latest_ver) == 0)
+                        needs_update = not same_version
+                    except Exception:
+                        # Fallback to string comparison if version parsing fails
+                        needs_update = (device_fw != latest_ver)
+
+                if needs_update:
+                    log.info("UPDATE Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
+                    log.info("Device fw: {} -> Latest release: {}".format(device_fw, latest_tag))
+                    log.info("use: nc -kulnw0 45678")
+                    await hd.configStartUpdate()
+                else:
+                    log.info("SKIP UPDATE: Device {} ({}) already at latest version {}".format(hd.getId(), hd.getName(), device_fw))
             elif config.command == "wifi":
                 log.info("WIFI RECONNECTION Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(),
                                                                                          hd.getIpAddress()))
