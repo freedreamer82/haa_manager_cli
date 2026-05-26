@@ -1047,6 +1047,15 @@ async def _run_device_command(config, log) -> None:
         print("")
         log.info("{} Devices Match".format(len(haaDevices)))
 
+        # Emit PairId lines so external parsers (e.g. HA push script) can extract
+        # ip, mac, name, category without needing mDNS discovery.
+        for hd in haaDevices:
+            print("PairId: {:20s} Ip: {:20s} Name: {:20s} Category: {:20s}".format(
+                hd.getId(),
+                hd.getIpAddress(),
+                hd.getName(),
+                homekitCategoryToString(hd.getCategory())))
+
         for hd in haaDevices:
             if config.command == "reboot":
                 log.info("REBOOT Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(), hd.getName(), hd.getId(), hd.getIpAddress()))
