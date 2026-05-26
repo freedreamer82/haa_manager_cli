@@ -332,11 +332,11 @@ class _HAPDiscovery:
 
 class _PairingInfo:
     """Fallback description built from aiohomekit pairing data when mDNS has no TXT."""
-    def __init__(self, pairing_id: str, pairing):
+    def __init__(self, pairing_id: str, pairing, category=None):
         self.id = pairing_id
         self.model = ''
         self.name = pairing_id  # no mDNS name available
-        self.category = Categories.OTHER
+        self.category = category if category is not None else Categories.OTHER
         pd = getattr(pairing, '_pairing_data', {})
         addr = pd.get('AccessoryIP', pd.get('AccessoryAddress', pd.get('Address', None)))
         if addr is None:
@@ -349,8 +349,8 @@ class _PairingInfo:
 
 class _PairingDiscovery:
     """Used when a pairing exists but the device was not found via mDNS."""
-    def __init__(self, pairing_id: str, pairing):
-        self.description = _PairingInfo(pairing_id, pairing)
+    def __init__(self, pairing_id: str, pairing, category=None):
+        self.description = _PairingInfo(pairing_id, pairing, category=category)
 
 
 # ---------------------------------------------------------------------------
@@ -936,6 +936,52 @@ def _prescan_and_patch(pairing_file: str, log) -> tuple:
     return tmp_path, pid_info
 
 
+# HomeKit short UUID (first 8 hex chars) → device Categories
+_SHORT_UUID_TO_CATEGORY = {
+    '00000040': Categories.FAN,
+    '00000041': Categories.GARAGE,
+    '00000043': Categories.LIGHTBULB,
+    '00000044': Categories.DOOR_LOCK,
+    '00000049': Categories.OUTLET,
+    '0000004A': Categories.THERMOSTAT,
+    '0000007E': Categories.SENSOR,
+    '00000085': Categories.SECURITY_SYSTEM,
+    '0000008B': Categories.DOOR,
+    '0000008C': Categories.WINDOW_COVERING,
+    '0000008D': Categories.WINDOW,
+    '00000096': Categories.SWITCH,
+    '000000BB': Categories.AIR_PURIFIER,
+    '000000BC': Categories.HUMIDIFIER,
+    '000000CF': Categories.SPRINKLER,
+    '000000D7': Categories.FAUCET,
+    '000000D8': Categories.TELEVISION,
+}
+
+# Suffix shared by all standard Apple HomeKit service UUIDs
+_HAP_APPLE_SUFFIX = '-0000-1000-8000-0026BB765291'
+
+
+def _infer_category_from_data(data: list) -> Categories:
+    """
+    Infer the HAP category from list_accessories_and_characteristics() data.
+    >1 accessories → BRIDGE; otherwise scan non-info standard service types.
+    """
+    if len(data) > 1:
+        return Categories.BRIDGE
+    for accessory in data:
+        for service in accessory.get('services', []):
+            stype = service.get('type', '').upper()
+            if stype == SERVICE_INFO_TYPE.upper():
+                continue
+            if not stype.endswith(_HAP_APPLE_SUFFIX.upper()):
+                continue  # skip custom/vendor services (e.g. HAA_CUSTOM_SERVICE)
+            short = stype.split('-')[0]
+            cat = _SHORT_UUID_TO_CATEGORY.get(short)
+            if cat:
+                return cat
+    return Categories.OTHER
+
+
 def _reset_pairing_connection(pairing) -> None:
     """
     Clear aiohomekit's cached connection so the next call opens a fresh TCP session.
@@ -977,7 +1023,8 @@ async def _try_connect_pairing(k: str, v, name_to_ip: dict, ctx, log):
     _reset_pairing_connection(v)
     try:
         data = await asyncio.wait_for(v.list_accessories_and_characteristics(), timeout=5.0)
-        zc = ctx.getDiscovereHAADeviceById(k) or _PairingDiscovery(k, v)
+        inferred_cat = _infer_category_from_data(data)
+        zc = ctx.getDiscovereHAADeviceById(k) or _PairingDiscovery(k, v, category=inferred_cat)
         return (k, v, zc, data)
     except Exception as e:
         log.debug("%s (%s): failed -> %s: %s", dev_info['name'], arp_ip, type(e).__name__, e)
