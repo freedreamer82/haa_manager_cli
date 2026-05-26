@@ -5,3 +5,4 @@ configargparse
 scapy
 HAP-python
 requests
+python-nmap
