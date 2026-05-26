@@ -18,6 +18,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/gpl-3.0.txt>.
 
 import argparse
 import base64
+import subprocess
 import aiohomekit
 import requests
 import socket, os
@@ -25,7 +26,6 @@ import signal as unixsignal
 from logging.handlers import RotatingFileHandler
 import configargparse
 import urllib.request
-from scapy.all import ARP, Ether, srp
 import socket
 import requests
 from concurrent.futures import ThreadPoolExecutor
@@ -36,7 +36,8 @@ import contextlib
 import logging
 import sys
 import re
-from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
+from zeroconf import InterfaceChoice
+from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf, AsyncServiceInfo
 from aiohomekit.zeroconf import ZeroconfServiceListener
 from aiohomekit import Controller
 from aiohomekit.model.categories import Categories
@@ -66,8 +67,6 @@ HEADER_FILE_PATH = "HAA/HAA_Main/main/header.h"
 ALL_DEVICES_WILDCARD = "*"
 
 FILELOGSIZE = 1024 * 1024 * 10  # 10 mb max
-
-
 
 
 # GitHub related functions
@@ -166,7 +165,7 @@ def get_custom_haa_command(version_tag="master", debug=False):
 
 parser = configargparse.ArgParser(default_config_files=[''])
 parser.add("-l", "--log", nargs=1, metavar=("log File"), default=False,
-           help=" path file to save log")  # this option can be set in a config file because it starts with '--'
+           help=" path file to save log")
 parser.add('-v', action='version', version=VERSION + "\n" + AUTHOR)
 parser.add('-d', '--debug', action='store_true', default=False, help='debug mode')
 parser.add('-t', '--timeout', required=False, type=int, default=10, help='Number of seconds to wait')
@@ -197,10 +196,10 @@ latest_parser = subparsers.add_parser('latest', help="Get the latest GitHub rele
 def get_local_ip():
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))  # Connessione fittizia a Google DNS
+            s.connect(("8.8.8.8", 80))
             return s.getsockname()[0]
     except Exception:
-        return "127.0.0.1"  # Fallback in caso di errore
+        return "127.0.0.1"
 
 def homekitCategoryToString(category : int) -> str :
     if category == Categories.OTHER :
@@ -289,6 +288,74 @@ def versionCompare(v1, v2):
        return 0
 
 
+# ---------------------------------------------------------------------------
+# HAP discovery helpers — bypass aiohomekit's broken async_discover()
+# ---------------------------------------------------------------------------
+
+class _RawHAPListener:
+    """Zeroconf listener that only records (type, name) tuples without any I/O."""
+    def __init__(self):
+        self.pending = []
+
+    def add_service(self, zc, type_, name):
+        logging.getLogger().debug("[mDNS] add_service  type=%s  name=%s", type_, name)
+        self.pending.append((type_, name))
+
+    def remove_service(self, zc, type_, name):
+        logging.getLogger().debug("[mDNS] remove_service  name=%s", name)
+        self.pending = [(t, n) for t, n in self.pending if n != name]
+
+    def update_service(self, zc, type_, name):
+        logging.getLogger().debug("[mDNS] update_service  name=%s", name)
+        if (type_, name) not in self.pending:
+            self.pending.append((type_, name))
+
+
+class _HAPInfo:
+    """Mirrors the fields that HAADevice expects on discovery.description."""
+    def __init__(self, info: AsyncServiceInfo, props: dict):
+        self.id = props.get('id', '').lower()
+        self.model = props.get('md', '')
+        self.name = info.name          # full mDNS name, e.g. "MyDev._hap._tcp.local."
+        self.addresses = info.parsed_addresses()
+        try:
+            self.category = Categories(int(props.get('ci', 0)))
+        except Exception:
+            self.category = Categories.OTHER
+
+
+class _HAPDiscovery:
+    """Thin wrapper so callers can use discovery.description.xxx."""
+    def __init__(self, info: AsyncServiceInfo, props: dict):
+        self.description = _HAPInfo(info, props)
+
+
+class _PairingInfo:
+    """Fallback description built from aiohomekit pairing data when mDNS has no TXT."""
+    def __init__(self, pairing_id: str, pairing):
+        self.id = pairing_id
+        self.model = ''
+        self.name = pairing_id  # no mDNS name available
+        self.category = Categories.OTHER
+        pd = getattr(pairing, '_pairing_data', {})
+        addr = pd.get('AccessoryIP', pd.get('AccessoryAddress', pd.get('Address', None)))
+        if addr is None:
+            self.addresses = []
+        elif isinstance(addr, list):
+            self.addresses = addr
+        else:
+            self.addresses = [addr]
+
+
+class _PairingDiscovery:
+    """Used when a pairing exists but the device was not found via mDNS."""
+    def __init__(self, pairing_id: str, pairing):
+        self.description = _PairingInfo(pairing_id, pairing)
+
+
+# ---------------------------------------------------------------------------
+
+
 class HAADevice:
     def __init__(self, zcinfo, data, pairing):
         self.pairing = pairing
@@ -312,7 +379,6 @@ class HAADevice:
                     for characteristic in service['characteristics']:
                         if characteristic.get('type') == HAA_CUSTOM_CONFIG_CHAR:
                             value = characteristic.get('value', '')
-                            # 'aid': 1, 'iid': 65011,
                             return [int(characteristic.get('aid')), int(characteristic.get('iid'))]
         return None
 
@@ -326,7 +392,6 @@ class HAADevice:
                     for characteristic in service['characteristics']:
                         if characteristic.get('type') == HAA_CUSTOM_ADVANCED_CONFIG_CHAR:
                             value = characteristic.get('value', '')
-                            # 'aid': 1, 'iid': 65012,
                             return [int(characteristic.get('aid')), int(characteristic.get('iid'))]
         return None
 
@@ -373,9 +438,13 @@ class HAADevice:
         return self.info.description.id
 
     def getIpAddress(self) -> str:
-        return self.info.description.addresses[0]
+        addrs = self.info.description.addresses
+        return addrs[0] if addrs else 'unknown'
 
     def getName(self) -> str:
+        # Prefer HomeKit name from accessories data; fall back to mDNS service name
+        if self.name:
+            return self.name
         return self.info.description.name.split('._hap')[0]
 
     def getCategory(self) -> str:
@@ -393,23 +462,18 @@ class HAADevice:
         return word
 
     def _getWordToReboot(self):
-        # here check version to change word
         return self._getSetupWord() + "2"
 
     def _getWordToEnterSetup(self):
-        # here check version to change word
         return self._getSetupWord() + "1"
 
     def _getWordToWifiReconnection(self):
-        # here check version to change word
         return self._getSetupWord() + "3"
 
     def _getWordToStartUpdate(self):
-        # here check version to change word
         return self._getSetupWord() + "0"
 
     def _getWordToReadScript(self):
-        # here check version to change word
         str = self._getSetupWord() + "01 "  # with extra space necessary!
         enc = base64.b64encode(str.encode("utf-8"))
         return enc.decode('utf-8')
@@ -471,25 +535,19 @@ class HAADevice:
         Get custom command for a specific HAA version.
         First checks local mapping, then tries to fetch from GitHub if not found.
         """
-    
-        # If not found in dictionary, try to fetch from GitHub
         try:
-            # Create a tag name based on version
             tag_name = f"HAA_{version}"
-            # Try to get the command from GitHub
             command = get_custom_haa_command(tag_name, False)
             if command:
                 return command
             else:
-                # If specific version tag not found, try with master
                 command = get_custom_haa_command("master", False)
                 if command:
                     return command
         except Exception as e:
             Context.get().get_logger().error(f"Error getting command from GitHub: {e}")
             sys.exit(-1)
-            
-        # Fallback to default command
+
         return CUSTOM_HAA_COMMAND
 
     @staticmethod
@@ -499,7 +557,6 @@ class HAADevice:
             if tag:
                 return tag
             else:
-                # Fallback to original method
                 response = requests.get("https://api.github.com/repos/RavenSystem/esp-homekit-devices/releases/latest")
                 return response.json()["name"]
         except Exception as e:
@@ -539,8 +596,9 @@ class Context:
             Context.__instance.timeout = None
             Context.__instance.discoveredDevices = []
             Context.__instance.pairingfile = None
-            Context.__instance.zeroConf = AsyncZeroconf()
-            Context.__instance.controller = aiohomekit.Controller(async_zeroconf_instance=Context.__instance.zeroConf)
+            Context.__instance.zeroConf = None
+            Context.__instance.controller = None
+            Context.__instance._hap_listener = None
 
     def load_data(self, file):
         try:
@@ -551,14 +609,12 @@ class Context:
 
     @contextlib.asynccontextmanager
     async def get_controller(self) -> AsyncIterator[Controller]:
-        zeroconf = AsyncZeroconf()
-
-        controller = Controller(
-            async_zeroconf_instance=zeroconf
-        )
+        # Bind to all interfaces so we receive mDNS on every NIC (eth0, wlan0, …)
+        zeroconf = AsyncZeroconf(interfaces=InterfaceChoice.All)
+        controller = Controller(async_zeroconf_instance=zeroconf)
+        listener = _RawHAPListener()
 
         async with zeroconf:
-            listener = ZeroconfServiceListener()
             browser = AsyncServiceBrowser(
                 zeroconf.zeroconf,
                 [
@@ -567,28 +623,59 @@ class Context:
                 ],
                 listener=listener,
             )
-
             async with controller:
+                self.zeroConf = zeroconf
+                self.controller = controller
+                self._hap_listener = listener
                 yield controller
-
             await browser.async_cancel()
 
     async def discoverHAA(self, doPrint: bool = False) -> int:
-        async with self.get_controller() as controller:
-            self.controller = controller
-            await asyncio.sleep(self.get_timeout_sec())
+        log = self.get_logger()
 
-            async for discovery in controller.async_discover(self.get_timeout_sec()):
-                desc = discovery.description
+        # Wait for mDNS browser to collect service announcements
+        log.debug("[disc] sleeping %ds for mDNS...", self.get_timeout_sec())
+        await asyncio.sleep(self.get_timeout_sec())
 
-                if desc.model.startswith(HAA_MANUFACTURER):
-                    self._addHAADevice(discovery)
+        pending = list(self._hap_listener.pending)
+        log.debug("[disc] mDNS listener collected %d service(s)", len(pending))
+        if not pending:
+            print("[disc] WARNING: mDNS browser found 0 HAP services. "
+                  "Check that the Pi is on the same network/VLAN as the devices "
+                  "and that mDNS/Bonjour is not blocked by a firewall or router.")
+
+        for type_, name in pending:
+            log.debug("[disc] resolving: %s", name)
+            try:
+                info = AsyncServiceInfo(type_, name)
+                ok = await info.async_request(self.zeroConf.zeroconf, 3000)
+                if not ok:
+                    log.debug("[disc] async_request timeout for %s", name)
+                    continue
+                props = {
+                    (k.decode() if isinstance(k, bytes) else k):
+                    (v.decode() if isinstance(v, bytes) else str(v) if v is not None else '')
+                    for k, v in (info.properties or {}).items()
+                }
+                model = props.get('md', '')
+                addrs = info.parsed_addresses()
+                log.debug("[disc] %s  md='%s'  addrs=%s", name, model, addrs)
+                # Accept if model matches OR if name starts with "HAA-" (empty md during boot)
+                short_name = name.split('._hap')[0]
+                if model.startswith(HAA_MANUFACTURER) or (not model and short_name.upper().startswith('HAA-')):
+                    self._addHAADevice(_HAPDiscovery(info, props))
+                else:
+                    log.debug("[disc] skip (not HAA): %s  md='%s'", name, model)
+            except Exception as e:
+                log.debug("[disc] error resolving %s: %s", name, e)
+
+        log.debug("[disc] HAA devices found: %d", len(Context.__instance.discoveredDevices))
 
         if doPrint:
             for d in Context.__instance.discoveredDevices:
                 print("PairId: {:20s} Ip: {:20s} Name: {:20s} Category: {:20s}".format(
                     d.description.id,
-                    d.description.addresses[0],
+                    d.description.addresses[0] if d.description.addresses else 'N/A',
                     d.description.name.split('._hap')[0],
                     homekitCategoryToString(d.description.category)))
 
@@ -598,13 +685,13 @@ class Context:
         if not ip4:
             ip4 = get_local_ip()
         Context.get().get_logger().debug(f"My IP: {ip4}")
-        base_ip = ".".join(ip4.split(".")[:3])  # Es: "192.168.1.1" -> "192.168.1"
+        base_ip = ".".join(ip4.split(".")[:3])
         timeout = 0.8
 
         def scan_ip(ip):
             try:
                 with socket.create_connection((ip, SETUP_PORT), timeout):
-                    return ip  # LETS CONSIDER IN setup mode if connection is ok
+                    return ip
             except (socket.timeout, socket.error):
                 return None
 
@@ -682,6 +769,10 @@ def parseArguments(config: argparse.Namespace) -> None:
                             datefmt='%H:%M:%S',
                             level=log_level)
 
+    # Suppress spurious aiohomekit background-task errors (AccessoryDisconnectedError
+    # from _process_config_changed): they don't affect our logic.
+    logging.getLogger().addFilter(_SuppressAiohomekitBgErrors())
+
 
 def getOnlineDevs(pair_devices, discoveredDevices):
     devs = {}
@@ -690,6 +781,326 @@ def getOnlineDevs(pair_devices, discoveredDevices):
             if disc.description.id == k:
                 devs[str(k)] = v
     return devs
+
+
+class _SuppressAiohomekitBgErrors(logging.Filter):
+    """Filter out spurious aiohomekit background-task AccessoryDisconnectedError noise."""
+    def filter(self, record):
+        if record.levelno == logging.ERROR and 'Failure running background task' in record.getMessage():
+            return False
+        return True
+
+
+def _read_arp_cache(log) -> dict:
+    """Read OS ARP cache from /proc/net/arp. Returns dict: MAC (lowercase) -> IP."""
+    mac_to_ip = {}
+    try:
+        with open('/proc/net/arp', 'r') as f:
+            next(f)  # skip header line
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 4:
+                    ip = parts[0]
+                    mac = parts[3].lower()
+                    if mac != '00:00:00:00:00:00':
+                        mac_to_ip[mac] = ip
+        log.debug("ARP cache: %d entries", len(mac_to_ip))
+    except Exception as e:
+        log.debug("ARP cache read error: %s", e)
+    return mac_to_ip
+
+
+def _load_friendly_names(pairing_file: str) -> dict:
+    """Read pairing JSON. Returns dict: lowercase AccessoryPairingID -> friendly name (e.g. HAA-07AA1F)."""
+    import json
+    result = {}
+    try:
+        with open(pairing_file) as f:
+            raw = json.load(f)
+        for name, data in raw.items():
+            if isinstance(data, dict):
+                pid = data.get('AccessoryPairingID', '').lower()
+                if pid:
+                    result[pid] = name
+    except Exception:
+        pass
+    return result
+
+
+def _prescan_and_patch(pairing_file: str, log) -> tuple:
+    """
+    Read the pairing JSON, nmap-scan for HAP ports, ARP-match device MACs,
+    write a patched temp JSON with correct IPs so aiohomekit always reads
+    the right IP from disk — not a stale cached value.
+    Returns: (patched_file_path, {AccessoryPairingID_lower -> ip})
+    Falls back to (original_file, {}) on any error.
+    """
+    import json as _json, tempfile, os as _os
+    try:
+        import nmap as nmap_lib
+    except ImportError:
+        log.debug("python-nmap not installed (pip install python-nmap)")
+        return pairing_file, {}
+
+    try:
+        with open(pairing_file) as f:
+            raw = _json.load(f)
+    except Exception as e:
+        log.debug("prescan: cannot read pairing file: %s", e)
+        return pairing_file, {}
+
+    # Collect HAP ports directly from the raw JSON
+    ports_set = set()
+    for json_key, data in raw.items():
+        if isinstance(data, dict):
+            port = data.get('AccessoryPort')
+            if port:
+                ports_set.add(int(port))
+
+    if not ports_set:
+        log.debug("prescan: no AccessoryPort found")
+        return pairing_file, {}
+
+    local_ip = get_local_ip()
+    subnet = ".".join(local_ip.split(".")[:3]) + ".0/24"
+    ports_csv = ",".join(str(p) for p in sorted(ports_set))
+    log.info("nmap: scanning %s  ports [%s] ...", subnet, ports_csv)
+
+    try:
+        nm = nmap_lib.PortScanner()
+        nm.scan(hosts=subnet, ports=ports_csv, arguments='-sT -T4 --open')
+    except Exception as e:
+        log.debug("nmap scan error: %s", e)
+        return pairing_file, {}
+
+    nmap_ips: set = set()
+    for host in nm.all_hosts():
+        if 'tcp' in nm[host]:
+            for pdata in nm[host]['tcp'].values():
+                if pdata['state'] == 'open':
+                    nmap_ips.add(host)
+
+    log.info("nmap: found %d host(s) with HAP port(s) open", len(nmap_ips))
+
+    # nmap TCP connects populate the OS ARP cache — read it now
+    arp_cache = _read_arp_cache(log)
+    arp_cache = {mac: ip for mac, ip in arp_cache.items() if ip in nmap_ips}
+    log.debug("ARP cache filtered to nmap IPs: %d entries", len(arp_cache))
+
+    # MAC suffix matching: JSON key "HAA-07AA1F" → last 6 hex → match ARP MAC.
+    # HAA device names encode the last 3 WiFi MAC bytes: HAA-07AA1F <-> xx:xx:xx:07:aa:1f
+    json_name_to_ip: dict = {}   # JSON top-level key  -> ip
+    pid_info: dict = {}          # AccessoryPairingID (lower) -> {'ip', 'name', 'mac'}
+
+    for json_key, data in raw.items():
+        if not isinstance(data, dict):
+            continue
+        suffix = json_key.split('-')[-1].lower()   # "07aa1f" from "HAA-07AA1F"
+        if len(suffix) != 6:
+            continue
+        for mac, ip in arp_cache.items():
+            if mac.replace(':', '').endswith(suffix):
+                json_name_to_ip[json_key] = ip
+                pid = data.get('AccessoryPairingID', '').lower()
+                if pid:
+                    pid_info[pid] = {'ip': ip, 'name': json_key, 'mac': mac}
+                log.info("ARP match: %-20s  %s  (via %s)", json_key, ip, mac)
+                break
+
+    unmatched = [n for n in raw if isinstance(raw[n], dict) and n not in json_name_to_ip]
+    if unmatched:
+        log.info("No ARP match for: %s", ", ".join(sorted(unmatched)))
+
+    if not json_name_to_ip:
+        return pairing_file, {}
+
+    # Build patched JSON: update ALL address-like keys for matched devices
+    patched = {}
+    for json_key, data in raw.items():
+        if not isinstance(data, dict) or json_key not in json_name_to_ip:
+            patched[json_key] = data
+            continue
+        ip = json_name_to_ip[json_key]
+        entry = dict(data)
+        for key, val in list(entry.items()):
+            if any(x in key.lower() for x in ('ip', 'address', 'host', 'addr')):
+                entry[key] = [ip] if isinstance(val, list) else ip
+        entry.setdefault('AccessoryIP', ip)
+        patched[json_key] = entry
+
+    fd, tmp_path = tempfile.mkstemp(suffix='.json', prefix='haa_pairing_')
+    with _os.fdopen(fd, 'w') as f:
+        _json.dump(patched, f)
+
+    log.debug("prescan: patched pairing JSON -> %s", tmp_path)
+    return tmp_path, pid_info
+
+
+def _reset_pairing_connection(pairing) -> None:
+    """
+    Clear aiohomekit's cached connection so the next call opens a fresh TCP session.
+    Bridge sub-accessories share the bridge IP; after a failed attempt on the wrong IP
+    the cached (broken) connection must be cleared before trying a new IP.
+    """
+    for attr in ('_connection', '_impl', '_session', '_transport'):
+        try:
+            current = getattr(pairing, attr, None)
+            if current is not None:
+                close_fn = getattr(current, 'close', None)
+                if close_fn and not asyncio.iscoroutinefunction(close_fn):
+                    try:
+                        close_fn()
+                    except Exception:
+                        pass
+                try:
+                    setattr(pairing, attr, None)
+                except (AttributeError, TypeError):
+                    pass
+        except Exception:
+            pass
+
+
+async def _try_connect_pairing(k: str, v, name_to_ip: dict, ctx, log):
+    """
+    HAP connection for one pairing.
+    IP is already correct in the pairing object: _prescan_and_patch wrote it
+    into the JSON before aiohomekit loaded it.
+    Returns (k, v, zc_dev, data) or None.
+    """
+    dev_info = name_to_ip.get(k)
+    if not dev_info:
+        log.debug("%s: no ARP match — skipping", k)
+        return None
+
+    arp_ip = dev_info['ip']
+    log.debug("%s (%s): trying %s", dev_info['name'], k, arp_ip)
+    _reset_pairing_connection(v)
+    try:
+        data = await asyncio.wait_for(v.list_accessories_and_characteristics(), timeout=5.0)
+        zc = ctx.getDiscovereHAADeviceById(k) or _PairingDiscovery(k, v)
+        return (k, v, zc, data)
+    except Exception as e:
+        log.debug("%s (%s): failed -> %s: %s", dev_info['name'], arp_ip, type(e).__name__, e)
+
+    log.debug("%s NOT online (IP: %s)", dev_info['name'], arp_ip)
+    return None
+
+
+async def _run_device_command(config, log) -> None:
+    """Runs all device-related commands inside a single controller context."""
+    ctx = Context.get()
+
+    log.info("Last release: {}".format(HAADevice.getLastRelease()))
+
+    # Pre-scan BEFORE aiohomekit loads the pairings: patch the JSON with correct IPs
+    # so aiohomekit reads the right IP from disk, not a stale cached value.
+    patched_file, name_to_ip = await asyncio.to_thread(_prescan_and_patch, config.file, log)
+    try:
+      async with ctx.get_controller():
+        pair_devices = ctx.load_data(patched_file)
+
+        if config.command == 'scan':
+            ctx.discoverHAAInSetupMode()
+            return
+
+        if config.id != ALL_DEVICES_WILDCARD and config.id not in pair_devices:
+            log.error('"{}" is not a known paired device'.format(config.id))
+            sys.exit(-1)
+
+        candidates = {
+            k: v for k, v in pair_devices.items()
+            if config.id == ALL_DEVICES_WILDCARD or k == config.id
+        }
+
+        total = len(candidates)
+        results = []
+        for i, (k, v) in enumerate(candidates.items(), 1):
+            dev_info = name_to_ip.get(k)
+            if dev_info:
+                desc = f"{dev_info['name']}  {dev_info['ip']}  {dev_info['mac']}"
+            else:
+                desc = f"{k}  (no match)"
+            print(f"\rConnecting ({i}/{total}): {desc}...", end='\033[K', flush=True)
+            result = await _try_connect_pairing(k, v, name_to_ip, ctx, log)
+            results.append(result)
+        print()  # newline after progress
+
+        haaDevices = []
+        for result in results:
+            if result is None:
+                continue
+            k, v, zc, data = result
+            for accessory in data:
+                for service in accessory['services']:
+                    if service['type'] != SERVICE_INFO_TYPE:
+                        continue
+                    for char in service['characteristics']:
+                        if char.get('type') == SERVICE_INFO_CHAR_NAME:
+                            device_name = char.get('value', '')
+                            haaDev = HAADevice(zc, data, v)
+                            if haaDev.manufacturer and haaDev.manufacturer.startswith(HAA_MANUFACTURER):
+                                log.debug("haa device {} ({}) handled ...".format(k, device_name))
+                                haaDevices.append(haaDev)
+                            break
+                    break
+
+        print("")
+        log.info("{} Devices Match".format(len(haaDevices)))
+
+        for hd in haaDevices:
+            if config.command == "reboot":
+                log.info("REBOOT Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(), hd.getName(), hd.getId(), hd.getIpAddress()))
+                await hd.configReboot()
+            elif config.command == "update":
+                device_fw = hd.getFwVersion()
+                latest_tag = HAADevice.getLastRelease()
+
+                latest_ver = None
+                if latest_tag:
+                    m = re.search(r'(\d+(?:\.\d+)+)', str(latest_tag))
+                    latest_ver = m.group(1) if m else latest_tag
+
+                needs_update = True
+                if device_fw and latest_ver:
+                    try:
+                        same_version = (versionCompare(device_fw, latest_ver) == 0)
+                        needs_update = not same_version
+                    except Exception:
+                        needs_update = (device_fw != latest_ver)
+
+                if needs_update:
+                    log.info("UPDATE Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(), hd.getName(), hd.getId(), hd.getIpAddress()))
+                    log.info("Device fw: {} -> Latest release: {}".format(device_fw, latest_tag))
+                    log.info("use: nc -kulnw0 45678")
+                    await hd.configStartUpdate()
+                else:
+                    log.info("SKIP UPDATE: Device {} ({}) already at latest version {}".format(hd.getId(), hd.getName(), device_fw))
+            elif config.command == "wifi":
+                log.info("WIFI RECONNECTION Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(), hd.getName(), hd.getId(), hd.getIpAddress()))
+                await hd.configWifiReconnection()
+            elif config.command == "setup":
+                log.info("SETUP Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(), hd.getName(), hd.getId(), hd.getIpAddress()))
+                log.info("http://{}:4567".format(hd.getIpAddress()))
+                await hd.configEnterSetup()
+            elif config.command == "dump":
+                log.info("DUMP Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(), hd.getName(), hd.getId(), hd.getIpAddress()))
+                hd.dumpHomekitData()
+            elif config.command == "script":
+                if config.params:
+                    print(f"Running script with parameters: {config.params}")
+                else:
+                    log.info("Script Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(), hd.getName(), hd.getId(), hd.getIpAddress()))
+                    script = await hd.getConfigScript()
+                    print(script)
+                    print()
+            elif config.command == "version":
+                log.info("Device: {}({})       Version: {:20s}".format(hd.getId(), hd.getName(), hd.getFwVersion()))
+    finally:
+        if patched_file != config.file:
+            try:
+                os.unlink(patched_file)
+            except Exception:
+                pass
 
 
 async def main(argv: list[str] | None = None) -> None:
@@ -701,7 +1112,7 @@ async def main(argv: list[str] | None = None) -> None:
 
     log = Context.get().get_logger()
 
-    # Handle GitHub-related commands first
+    # Handle GitHub-related commands first (no network discovery needed)
     if config.command == 'tags':
         get_all_tags(config.debug)
         return
@@ -710,157 +1121,31 @@ async def main(argv: list[str] | None = None) -> None:
         return
     elif config.command == 'custom':
         if config.version:
-            # If version provided, check custom command for that version
             tag_name = f"HAA_{config.version}"
             print(f"🔍 Looking up CUSTOM_HAA_COMMAND for version: {config.version} (tag: {tag_name})")
             command = HAADevice.getCustomCommand(config.version)
             print(f"Custom command for version {config.version}: {command}")
         elif config.tag:
-            # If tag provided, lookup directly with that tag
             print(f"🔍 Looking up CUSTOM_HAA_COMMAND for tag: {config.tag}")
             get_custom_haa_command(config.tag, config.debug)
         else:
-            # Default to master
             print("🔍 Looking up CUSTOM_HAA_COMMAND for latest master")
             get_custom_haa_command("master", config.debug)
         return
 
-    # For device commands, check if -f is provided
+    # For device commands, -f is required
     if not config.file:
         log.error("File with pairing data is required for this command")
         sys.exit(1)
 
-    haaDevices = []
+    await _run_device_command(config, log)
 
-    log.info("Last release: {}".format(HAADevice.getLastRelease()))
-
-    log.info("Discovering HAA devices in the network...")
-
-    devsNo = await Context.get().discoverHAA(True)
-
-    pair_devices = Context.get().load_data(config.file)
-
-    onlineDevs = getOnlineDevs(pair_devices, Context.get().getDiscoveredHAADevices())
-
-    log.info("Found {} devices online. {} paired {} are Online\r\n".format(devsNo, len(pair_devices), len(onlineDevs)))
-
-    if config.command == 'scan':
-        Context.get().discoverHAAInSetupMode()
-    else:
-        ## Validate name of the device
-        if config.id != ALL_DEVICES_WILDCARD:
-            dev = Context.get().getDiscovereHAADeviceById(config.id)
-            if not dev:
-                log.error('"{a}" is not a valid device name found online'.format(a=config.id))
-                sys.exit(-1)
-
-            deviceIsPaired : bool = False
-            #we found the name onlne , is it paired? get its Paired ID
-            for k,v in pair_devices.items():
-                if dev.description.id == k:#v._pairing_data.get('AccessoryPairingID') :
-                    deviceIsPaired = True
-                    break
-
-            if not deviceIsPaired:
-                log.error('"{a}" is an online device but NOT Paired'.format(a=config.id))
-                sys.exit(-1)
-        #############
-
-        doexit: bool = False
-        for k, v in onlineDevs.items(): #pair_devices.items():
-            if config.id == ALL_DEVICES_WILDCARD or k == config.id:
-
-                try:
-                    data = await v.list_accessories_and_characteristics()
-                except Exception as e:
-                    log.error("{} NOT online..!".format(k))
-                    continue
-
-                if doexit:
-                    break
-
-                for accessory in data:
-                    for service in accessory['services']:
-                        s_type = service['type']
-                        if s_type == SERVICE_INFO_TYPE:
-                            for characteristic in service['characteristics']:
-                                if characteristic.get('type') == SERVICE_INFO_CHAR_NAME:
-                                    name = characteristic.get('value', '')
-                                    zeroConfDev = Context.get().getDiscovereHAADeviceById(k)
-                                    if Context.get().getDiscovereHAADeviceById(k) is not None:
-                                        if config.id == ALL_DEVICES_WILDCARD or config.id == zeroConfDev.description.id:
-                                            haaDev = HAADevice(zeroConfDev, data, v)
-                                            log.info("haa device {} ({}) handled ...".format(k,name))
-                                            haaDevices.append(haaDev)
-                                            if config.id != ALL_DEVICES_WILDCARD:
-                                                # break on first device found if not all are considered
-                                                doexit = True
-                                                break
-
-        print("")
-        log.info("{} Devices Match".format(len(haaDevices)))
-
-        for hd in haaDevices:
-            if config.command == "reboot":
-                log.info("REBOOT Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
-                await hd.configReboot()
-            elif config.command == "update":
-                # Check device current firmware version against latest release
-                device_fw = hd.getFwVersion()
-                latest_tag = HAADevice.getLastRelease()
-                
-                # Extract numeric version from tag (e.g. "HAA_12.14.6" -> "12.14.6")
-                latest_ver = None
-                if latest_tag:
-                    m = re.search(r'(\d+(?:\.\d+)+)', str(latest_tag))
-                    latest_ver = m.group(1) if m else latest_tag
-
-                # Compare versions to decide if update is needed
-                needs_update = True
-                if device_fw and latest_ver:
-                    try:
-                        # Use version comparison function (0 means equal)
-                        same_version = (versionCompare(device_fw, latest_ver) == 0)
-                        needs_update = not same_version
-                    except Exception:
-                        # Fallback to string comparison if version parsing fails
-                        needs_update = (device_fw != latest_ver)
-
-                if needs_update:
-                    log.info("UPDATE Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
-                    log.info("Device fw: {} -> Latest release: {}".format(device_fw, latest_tag))
-                    log.info("use: nc -kulnw0 45678")
-                    await hd.configStartUpdate()
-                else:
-                    log.info("SKIP UPDATE: Device {} ({}) already at latest version {}".format(hd.getId(), hd.getName(), device_fw))
-            elif config.command == "wifi":
-                log.info("WIFI RECONNECTION Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(),
-                                                                                         hd.getIpAddress()))
-                await hd.configWifiReconnection()
-            elif config.command == "setup":
-                log.info("SETUP Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
-                log.info("http://{}:4567".format(hd.getIpAddress()))
-                await hd.configEnterSetup()
-            elif config.command == "dump":
-                log.info("DUMP Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
-                hd.dumpHomekitData()
-            elif config.command == "script":
-                if config.params:
-                     print(f"Running script with parameters: {config.params}")
-                else:
-                    log.info("Script Device: {}({})        Id: {:20s} Ip: {:20s}".format(hd.getId(),hd.getName(), hd.getId(), hd.getIpAddress()))
-                    script = await hd.getConfigScript()
-                    print(script)
-                    print()
-            elif config.command == "version":
-                log.info("Device: {}({})       Version: {:20s}".format(hd.getId(),hd.getName(),hd.getFwVersion()))
-            
 
 def sync_main():
-        try:
-            asyncio.run(main())
-        except KeyboardInterrupt:
-            pass
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
 
 if __name__ == "__main__":
-        sync_main()
+    sync_main()
